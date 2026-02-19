@@ -3,7 +3,7 @@
 
 // Single threaded MINIMAL_RUNTIME programs do not need access to
 // document.currentScript, so a simple export declaration is enough.
-var LCTModule = (() => {
+var createModule = (() => {
   // When MODULARIZE this JS may be executed later,
   // after document.currentScript is gone, so we save it.
   // In EXPORT_ES6 mode we can just use 'import.meta.url'.
@@ -1979,10 +1979,10 @@ for (const prop of Object.keys(Module)) {
 
 // Export using a UMD style export, or ES6 exports if selected
 if (typeof exports === 'object' && typeof module === 'object') {
-  module.exports = LCTModule;
+  module.exports = createModule;
   // This default export looks redundant, but it allows TS to import this
   // commonjs style module.
-  module.exports.default = LCTModule;
+  module.exports.default = createModule;
 } else if (typeof define === 'function' && define['amd'])
-  define([], () => LCTModule);
+  define([], () => createModule);
 
