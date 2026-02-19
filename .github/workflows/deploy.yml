@@ -1,0 +1,58 @@
+name: Build and Deploy LCT Visualizer
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # Install emscripten
+    - name: Setup Emscripten
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+        echo "$(pwd)/upstream/emscripten" >> $GITHUB_PATH
+
+    # Compile C++ → WASM
+    - name: Build wasm
+      run: |
+        emcc cpp/lct.cpp \
+          -O3 \
+          -sMODULARIZE=1 \
+          -sEXPORT_NAME=createModule \
+          -sEXPORTED_FUNCTIONS=_malloc,_free,_createTree,_link,_cut,_access,_consume_events \
+          -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString \
+          -o web/lct.js
+
+    # Upload website files
+    - name: Upload Pages Artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: web/
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Deploy
+      id: deployment
+      uses: actions/deploy-pages@v4
+

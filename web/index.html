@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LCT Visualizer</title>
+</head>
+<body>
+
+<h2>Commands</h2>
+
+<input id="createBox" placeholder="createTree(i)">
+<button onclick="uiCreate()">Run</button>
+<br><br>
+
+<input id="linkBox" placeholder="link(a,b)">
+<button onclick="uiLink()">Run</button>
+<br><br>
+
+<input id="cutBox" placeholder="cut(a,b)">
+<button onclick="uiCut()">Run</button>
+<br><br>
+
+<input id="accessBox" placeholder="access(a)">
+<button onclick="uiAccess()">Run</button>
+<br><br>
+
+<button onclick="undo()">Undo</button>
+<hr>
+
+<div id="status" style="margin-top:10px; height:20px; color:#c0392b; font-weight:bold;"></div>
+
+<canvas id="treeCanvas" width="600" height="500"></canvas>
+<canvas id="auxCanvas" width="600" height="500"></canvas>
+
+<script>
+var Module = {
+  onRuntimeInitialized() {
+    console.log("WASM ready");
+    window.wasmReady = true;
+  }
+};
+</script>
+
+<script src="lct.js"></script>
+<script src="main.js"></script>
+
+</body>
+</html>
+
