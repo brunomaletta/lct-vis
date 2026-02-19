@@ -37,6 +37,9 @@ createModule().then(Module => {
 
     renderTree();
 
+	loadCommandsFromURL();
+    rebuildFromCommands();
+
 	canvas.addEventListener("click", e => {
 		const rect = canvas.getBoundingClientRect();
 
@@ -57,11 +60,111 @@ createModule().then(Module => {
 		canvas.style.cursor = getNodeAt(x,y)!==null ? "pointer" : "default";
 	});
 
+	window.addEventListener("hashchange", ()=>{
+		loadCommandsFromURL();
+		rebuildFromCommands();
+	});
+
 
 });
 
 
 // ---------- command system ----------
+
+function loadCommandsFromURL(){
+
+    if(location.hash.length<=1) return;
+
+    const encoded = decodeURIComponent(location.hash.substring(1));
+    commands = decodeCommands(encoded);
+}
+
+function encodeCommands(cmds){
+
+    function tok(c){
+        if(c.type==="create") return `c${c.a}`;
+        if(c.type==="link")   return `l${c.a}-${c.b}`;
+        if(c.type==="cut")    return `x${c.a}-${c.b}`;
+        if(c.type==="access") return `a${c.a}`;
+        return "";
+    }
+
+    let out = [];
+    let prev = null;
+    let count = 0;
+
+    function flush(){
+        if(!prev) return;
+
+        if(count===1) out.push(prev);
+        else out.push(prev + "*" + count);
+    }
+
+    for(const c of cmds){
+        const t = tok(c);
+
+        if(t===prev){
+            count++;
+        }else{
+            flush();
+            prev=t;
+            count=1;
+        }
+    }
+
+    flush();
+    return out.join(",");
+}
+
+function decodeCommands(str){
+
+    if(!str) return [];
+    const out = [];
+
+    function parseSingle(token){
+
+        if(token[0]==="c")
+            return {type:"create",a:Number(token.slice(1))};
+
+        if(token[0]==="a")
+            return {type:"access",a:Number(token.slice(1))};
+
+        if(token[0]==="l"){
+            const [a,b]=token.slice(1).split("-").map(Number);
+            return {type:"link",a,b};
+        }
+
+        if(token[0]==="x"){
+            const [a,b]=token.slice(1).split("-").map(Number);
+            return {type:"cut",a,b};
+        }
+
+        return null;
+    }
+
+    for(const part of str.split(",")){
+
+        if(part.includes("*")){
+            const [base,rep] = part.split("*");
+            const k = Number(rep);
+
+            const cmd = parseSingle(base);
+            for(let i=0;i<k;i++)
+                out.push({...cmd});
+        }
+        else{
+            out.push(parseSingle(part));
+        }
+    }
+
+    return out;
+}
+
+
+function updateURL(){
+    const encoded = encodeCommands(commands);
+    history.replaceState(null,"","#"+encoded);
+}
 
 function setStatus(msg, ok=false){
     const s = document.getElementById("status");
@@ -112,6 +215,14 @@ function expandCommand(cmd){
     return out;
 }
 
+function isRedundantAccess(cmd){
+    if(cmd.type!=="access") return false;
+    if(commands.length===0) return false;
+
+    const last = commands[commands.length-1];
+    return last.type==="access" && last.a===cmd.a;
+}
+
 function runCommand(cmd){
 
     if(!window.wasmReady){
@@ -137,8 +248,13 @@ function runCommand(cmd){
         }
     }
 
-    // commit to history
-    commands.push(...expanded);
+	// commit to history (skip duplicate access)
+	for(const c of expanded){
+		if(isRedundantAccess(c))
+			continue;
+		commands.push(c);
+	}
+	updateURL();
 
     setStatus("OK", true);
     rebuildFromCommands();
@@ -152,6 +268,7 @@ function runCommand(cmd){
 function undo(){
     if(commands.length===0) return;
     commands.pop();
+	updateURL();
     rebuildFromCommands();
 }
 
