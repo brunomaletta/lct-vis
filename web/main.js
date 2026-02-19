@@ -350,18 +350,37 @@ function updateAuxFromWasm(){
     const json = ModuleRef.UTF8ToString(ptr);
     const data = JSON.parse(json);
 
+	console.log(data);
+
     auxNodes = {};
 
-    for(const [v,p,l,r,type] of data){
+    // create nodes
+    for(const [v] of data){
         auxNodes[v] = {
             id:v,
-            parent:p,
-            left:l,
-            right:r,
-            pathParent:(type===1)
+            splayParent:null,
+            pathParent:null,
+            left:null,
+            right:null
         };
     }
+
+    // wire relations
+    for(const [v,p,l,r,type] of data){
+
+        if(l!=-1) auxNodes[v].left = l;
+        if(r!=-1) auxNodes[v].right = r;
+
+        if(type===2) // splay parent
+            auxNodes[v].splayParent = p;
+
+        if(type===1) // path parent
+            auxNodes[v].pathParent = p;
+    }
 }
+
+
+
 
 
 
@@ -413,6 +432,44 @@ function applyEvent(ev){
 	updateAuxFromWasm();
 }
 
+function getSplayRoots(){
+    const roots = [];
+    for(const id in auxNodes){
+        if(auxNodes[id].splayParent === null)
+            roots.push(Number(id));
+    }
+    return roots;
+}
+
+
+function layoutSplay(v, depth, x){
+
+    const node=auxNodes[v];
+
+    const left=node.left;
+    const right=node.right;
+
+    if(left==null && right==null){
+        node.localX=x;
+        node.localY=depth;
+        return x+1;
+    }
+
+    const start=x;
+
+    if(left!=null)
+        x=layoutSplay(left,depth+1,x);
+
+    if(right!=null)
+        x=layoutSplay(right,depth+1,x);
+
+    node.localX=(start+x-1)/2;
+    node.localY=depth;
+
+    return x;
+}
+
+
 function computeLayout(){
 
     let roots = [];
@@ -445,109 +502,6 @@ function layoutDFS(v,depth,x){
 
     node.x = (start + x-80)/2;
     node.y = 80 + depth*80;
-
-    return x;
-}
-
-function computeRepresentedDepth(){
-
-    const depth = new Map();
-
-    function dfs(v,d){
-        depth.set(v,d);
-        const node = forest.get(v);
-        for(const c of node.children)
-            dfs(c,d+1);
-    }
-
-    for(const [v,node] of forest)
-        if(node.parent===null)
-            dfs(v,0);
-
-    return depth;
-}
-
-function isSplayChild(v,p){
-    if(p==-1) return false;
-    const P = auxNodes[p];
-    if(!P) return false;
-    return P.left==v || P.right==v;
-}
-
-function isSplayRoot(v){
-    const n = auxNodes[v];
-    return n.parent==-1 || !isSplayChild(v,n.parent);
-}
-
-function buildChildSet(){
-    const isChild = new Set();
-
-    for(const id in auxNodes){
-        const n = auxNodes[id];
-        if(n.left!=-1) isChild.add(n.left);
-        if(n.right!=-1) isChild.add(n.right);
-    }
-
-    return isChild;
-}
-
-function computeAuxLayout(){
-
-    const visited = new Set();
-    const isChild = buildChildSet();
-
-    let x = 80;
-
-    // ONLY real top splay roots
-    for(const id in auxNodes){
-        const v = parseInt(id);
-
-        if(isSplayRoot(v) && !isChild.has(v)){
-            x = layoutAuxDFS(v,0,x,visited);
-            x += 120;
-        }
-    }
-
-    // attach path-parent nodes under their parents
-    for(const id in auxNodes){
-        const v = parseInt(id);
-        const n = auxNodes[v];
-
-        if(n.parent!=-1 && !isSplayChild(v,n.parent)){
-            const p = auxNodes[n.parent];
-            if(!p) continue;
-
-            n.x = p.x;
-            n.y = p.y + 90;
-        }
-    }
-}
-
-
-function layoutAuxDFS(v,depth,x,visited){
-
-    if(visited.has(v)) return x;
-    visited.add(v);
-
-    const node = auxNodes[v];
-
-    const L=node.left, R=node.right;
-
-    if(L===-1 && R===-1){
-        node.x=x;
-        node.y=80+depth*70;
-        return x+70;
-    }
-
-    let start=x;
-
-    if(L!=-1) x=layoutAuxDFS(L,depth+1,x,visited);
-
-    node.x=x;
-    node.y=80+depth*70;
-    x+=70;
-
-    if(R!=-1) x=layoutAuxDFS(R,depth+1,x,visited);
 
     return x;
 }
@@ -614,10 +568,6 @@ function drawAuxEdge(a,b,kind){
 
     // ensure arrow always points upward (toward ancestor)
     let from = a, to = b;
-    if(a.y < b.y){
-        from = b;
-        to = a;
-    }
 
     const color = (kind==="path") ? "#999" : "#000";
 
@@ -649,13 +599,14 @@ function drawAuxEdge(a,b,kind){
     auxCtx.setLineDash([]);
 
     // ---- arrow ----
-    drawArrow(
-        auxCtx,
-        endX,endY,
-        to.x - ux*(R-1),
-        to.y - uy*(R-1),
-        color
-    );
+    if (kind === "path")
+		drawArrow(
+			auxCtx,
+			endX,endY,
+			to.x - ux*(R-1),
+			to.y - uy*(R-1),
+			color
+		);
 }
 
 
@@ -711,33 +662,360 @@ function renderTree(){
 
 }
 
-function renderAux(){
+// layout tuning (tweak to taste)
+const NODE_GAP_X = 48;        // horizontal spacing per localX unit
+const NODE_GAP_Y = 66;        // vertical spacing inside splay tree
+const PATH_PARENT_GAP_Y = 110;// vertical gap between blocks along path-parent chain
+const BLOCK_GAP_X = 40;       // minimal horizontal gap between block bounding boxes
+const BASE_Y = 80;
 
-    if(!auxCtx) return;
+// --------- Combined layout (drop-in) ---------
 
-    auxCtx.clearRect(0,0,auxCanvas.width,auxCanvas.height);
-
-    computeAuxLayout();
-
-    for(const id in auxNodes){
-        const n = auxNodes[id];
-
-        if(n.left!=-1)
-            drawAuxEdge(n,auxNodes[n.left],"splay");
-
-        if(n.right!=-1)
-            drawAuxEdge(n,auxNodes[n.right],"splay");
-
-        if(n.parent!=-1 && !(
-            auxNodes[n.parent]?.left==n.id ||
-            auxNodes[n.parent]?.right==n.id
-        ))
-            drawAuxEdge(n,auxNodes[n.parent],"path");
+// A: compute splay-local layouts per splay root (localX: integers, localY: depth)
+function computeSplayLayouts() {
+    // detect splay roots
+    function isSplayChild(v, p) {
+        if (p == null) return false;
+        const P = auxNodes[p];
+        if (!P) return false;
+        return P.left === Number(v) || P.right === Number(v);
     }
 
-    for(const id in auxNodes)
-        drawAuxNode(id,auxNodes[id]);
+    const splayRoots = [];
+    for (const id in auxNodes) {
+        const n = auxNodes[id];
+        if (!n) continue;
+        // root if no splay parent
+        if (n.splayParent === null) splayRoots.push(Number(id));
+    }
+
+    const blocks = {}; // rootId -> block info
+    // layout each splay tree (inorder numbering starting at 0)
+    function layoutSplay(root) {
+        const nextX = { x: 0 };
+        function dfs(u, depth) {
+            if (u == null) return;
+            const n = auxNodes[u];
+            if (!n) return;
+            if (n.left != null) dfs(n.left, depth + 1);
+            n.localX = nextX.x++;
+            n.localY = depth;
+            if (n.right != null) dfs(n.right, depth + 1);
+        }
+        dfs(root, 0);
+
+        // collect nodes for the block
+        const nodes = [];
+        function collect(u) {
+            if (u == null) return;
+            const n = auxNodes[u];
+            nodes.push(Number(u));
+            if (n.left != null) collect(n.left);
+            if (n.right != null) collect(n.right);
+        }
+        collect(root);
+
+        // compute min/max/useful numbers
+        let minX = Infinity, maxX = -Infinity;
+        for (const id of nodes) {
+            const n = auxNodes[id];
+            minX = Math.min(minX, n.localX);
+            maxX = Math.max(maxX, n.localX);
+        }
+        // normalize so leftmost localX becomes 0 to ease center computations
+        for (const id of nodes) auxNodes[id].localX = auxNodes[id].localX - minX;
+
+        const widthUnits = maxX - minX + 1;
+        const centerLocal = (widthUnits - 1) / 2.0; // center in localX units
+
+        // store block info
+        blocks[root] = {
+            root: Number(root),
+            nodes,
+            minLocalX: 0,
+            maxLocalX: widthUnits - 1,
+            localCenter: centerLocal,
+            widthUnits
+        };
+
+        // also keep width in pixels
+        blocks[root].widthPx = blocks[root].widthUnits * NODE_GAP_X;
+    }
+
+    for (const r of splayRoots) layoutSplay(r);
+    return blocks;
 }
+
+
+// B: build block (root) graph using path-parent edges
+function buildBlockGraph(blocks) {
+    // node -> blockRoot
+    const nodeToRoot = {};
+    for (const rootId in blocks) {
+        for (const id of blocks[rootId].nodes) nodeToRoot[id] = Number(rootId);
+    }
+
+    const blockChildren = {}; // parentBlock -> [childBlock...]
+    const blockParents = {};  // childBlock -> parentBlock
+
+    for (const id in auxNodes) {
+        const n = auxNodes[id];
+        if (!n) continue;
+        // use explicit pathParent exported by WASM
+        const p = n.pathParent;
+        if (p != null && p !== -1) {
+            const childBlock = nodeToRoot[id];
+            const parentBlock = nodeToRoot[p];
+            if (childBlock == null || parentBlock == null || childBlock === parentBlock) continue;
+            blockParents[childBlock] = parentBlock;
+            if (!blockChildren[parentBlock]) blockChildren[parentBlock] = [];
+            if (!blockChildren[parentBlock].includes(childBlock)) blockChildren[parentBlock].push(childBlock);
+        }
+    }
+
+    return { nodeToRoot, blockChildren, blockParents };
+}
+
+
+// C: compute desired block centers (pixels) by pulling child block toward the parent node's pixel x
+function computeDesiredBlockX(blocks, graph) {
+    const desired = {};
+    // initial desired = local center in pixels
+    for (const rootId in blocks) {
+        desired[rootId] = blocks[rootId].localCenter * NODE_GAP_X;
+    }
+
+    // iterate to propagate anchors from parents -> children
+    const ITER = 10;
+    for (let it = 0; it < ITER; ++it) {
+        for (const childBlockStr in graph.blockParents) {
+            const childBlock = Number(childBlockStr);
+            const parentBlock = Number(graph.blockParents[childBlock]);
+            if (!blocks[parentBlock]) continue;
+
+            // find which parent node inside parentBlock the child points to
+            let targetParentNode = null;
+            for (const nid of blocks[childBlock].nodes) {
+                const par = auxNodes[nid].pathParent;   // <-- changed here
+                if (par != null && graph.nodeToRoot[par] === parentBlock) {
+                    targetParentNode = par;
+                    break;
+                }
+            }
+            if (targetParentNode == null) continue;
+
+            const parentNode = auxNodes[targetParentNode];
+            const parentBlockCenterLocal = blocks[parentBlock].localCenter;
+            // approximate parent node pixel (using current desired center of parent block)
+            const parentNodePixel = desired[parentBlock] + (parentNode.localX - parentBlockCenterLocal) * NODE_GAP_X;
+
+            // move child desired toward parent node pixel (damped)
+            desired[childBlock] = desired[childBlock] * ANCHOR_DAMPING + parentNodePixel * PULL_WEIGHT;
+        }
+    }
+
+    return desired;
+}
+
+
+
+// D: resolve collisions — ensure block centers separated by block widths + gap
+function resolveBlockPositions(blocks, desired) {
+    const items = Object.keys(blocks).map(k => ({ id: Number(k), want: desired[k] || blocks[k].localCenter * NODE_GAP_X, width: blocks[k].widthPx }));
+    items.sort((a, b) => a.want - b.want);
+
+    const placed = {};
+    if (items.length === 0) return placed;
+
+    // place first centered at its wanted position
+    placed[items[0].id] = items[0].want;
+    let rightEdge = placed[items[0].id] + items[0].width / 2;
+
+    for (let i = 1; i < items.length; ++i) {
+        const it = items[i];
+        const halfW = it.width / 2;
+        const minCenter = rightEdge + BLOCK_GAP_X + halfW;
+        const center = Math.max(it.want, minCenter);
+        placed[it.id] = center;
+        rightEdge = center + halfW;
+    }
+
+    // second pass: try to pull left if a later block wanted more left (local balancing)
+    for (let i = items.length - 2; i >= 0; --i) {
+        const cur = items[i];
+        const nxt = items[i + 1];
+        const maxCenter = placed[nxt.id] - (cur.width / 2) - BLOCK_GAP_X;
+        if (placed[cur.id] > maxCenter) {
+            placed[cur.id] = maxCenter;
+        }
+    }
+
+    return placed;
+}
+
+// ---------- Fit & center helper + small tuning ----------
+
+// Tweak these to control how strongly child blocks are pulled under parent node
+const PULL_WEIGHT = 0.65;      // currently we used 0.65 (child moves 65% toward parent's pixel x)
+const ANCHOR_DAMPING = 1 - PULL_WEIGHT; // e.g. 0.35
+// Vertical stacking for path-parent. Reduce to bring blocks closer vertically.
+const PATH_PARENT_GAP_Y_TUNE = 80; // try 80..120
+
+// Fit layout into auxCanvas: scale & translate to keep everything visible with padding.
+function fitToAuxCanvas(padding = 36) {
+    if (!auxCanvas || !auxCtx) return;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const id in auxNodes) {
+        const n = auxNodes[id];
+        if (n.x === undefined || n.y === undefined) continue;
+        minX = Math.min(minX, n.x);
+        maxX = Math.max(maxX, n.x);
+        minY = Math.min(minY, n.y);
+        maxY = Math.max(maxY, n.y);
+    }
+
+    if (minX === Infinity) return; // nothing to fit
+
+    const contentW = Math.max(1, maxX - minX);
+    const contentH = Math.max(1, maxY - minY);
+
+    const availW = Math.max(10, auxCanvas.width - 2 * padding);
+    const availH = Math.max(10, auxCanvas.height - 2 * padding);
+
+    // scale down if needed, but don't scale up beyond 1 (keeps node positions readable)
+    const scale = Math.min(1, Math.min(availW / contentW, availH / contentH));
+
+    // center content in canvas (after scaling)
+    const contentCenterX = (minX + maxX) / 2;
+    const contentCenterY = (minY + maxY) / 2;
+
+    const canvasCenterX = auxCanvas.width / 2;
+    const canvasCenterY = auxCanvas.height / 2;
+
+    const tx = canvasCenterX - (contentCenterX * scale);
+    const ty = canvasCenterY - (contentCenterY * scale);
+
+    // apply transform: overwrite n.x/n.y to transformed coords
+    for (const id in auxNodes) {
+        const n = auxNodes[id];
+        if (n.x === undefined || n.y === undefined) continue;
+        n.x = Math.round(n.x * scale + tx);
+        n.y = Math.round(n.y * scale + ty);
+    }
+}
+
+// Replace applyGlobalCoords (or add after it) with this safer version
+function applyGlobalCoords(blocks, graph, blockPositions){
+
+    const placed = new Set();
+
+    function placeBlock(blockId, baseY){
+
+        if(placed.has(blockId)) return;
+        placed.add(blockId);
+
+        const block = blocks[blockId];
+        const centerX = blockPositions[blockId];
+
+        // 1) place THIS block
+        for(const id of block.nodes){
+            const n = auxNodes[id];
+            const dx = (n.localX - block.localCenter) * NODE_GAP_X;
+
+            n.x = Math.round(centerX + dx);
+            n.y = Math.round(baseY + n.localY * NODE_GAP_Y);
+        }
+
+        // 2) place children blocks relative to actual parent node
+        const children = graph.blockChildren[blockId] || [];
+
+        for(const child of children){
+
+            let parentNodeId = null;
+            let childAttachId = null;
+
+            // find attachment edge
+            for(const nid of blocks[child].nodes){
+                const p = auxNodes[nid].pathParent;
+                if(p!=null && graph.nodeToRoot[p]===blockId){
+                    parentNodeId = p;
+                    childAttachId = Number(nid);
+                    break;
+                }
+            }
+
+            if(parentNodeId==null){
+                placeBlock(child, baseY + PATH_PARENT_GAP_Y_TUNE);
+                continue;
+            }
+
+            const parentNode = auxNodes[parentNodeId];
+
+            // compute minimum required gap using splay gap
+            let splayGap = 0;
+            const childNode = auxNodes[childAttachId];
+            if(childNode.splayParent!=null){
+                const sp = auxNodes[childNode.splayParent];
+                splayGap = Math.max(0,(childNode.localY - sp.localY) * NODE_GAP_Y);
+            }
+
+            const MIN_EXTRA = 10;
+
+            const childBaseY =
+                parentNode.y + Math.max(PATH_PARENT_GAP_Y_TUNE, splayGap + MIN_EXTRA);
+
+            placeBlock(child, childBaseY);
+        }
+    }
+
+    // roots = blocks without parent
+    for(const b in blocks){
+        if(graph.blockParents[b]==null){
+            placeBlock(Number(b), BASE_Y);
+        }
+    }
+
+    fitToAuxCanvas(36);
+}
+
+
+// top-level combined function
+function computeAuxLayoutCombined() {
+    if (!auxNodes || Object.keys(auxNodes).length === 0) return;
+    const blocks = computeSplayLayouts();
+    const graph = buildBlockGraph(blocks);
+    const desired = computeDesiredBlockX(blocks, graph);
+    const blockPositions = resolveBlockPositions(blocks, desired);
+    applyGlobalCoords(blocks, graph, blockPositions);
+}
+
+
+function renderAux(){
+    if(!auxCtx) return;
+    auxCtx.clearRect(0,0,auxCanvas.width,auxCanvas.height);
+    computeAuxLayoutCombined();
+
+	// draw splay edges
+	for(const id in auxNodes){
+		const n = auxNodes[id];
+		if(n.left) drawAuxEdge(n, auxNodes[n.left], "splay");
+		if(n.right) drawAuxEdge(n, auxNodes[n.right], "splay");
+	}
+	// draw path-parent edges (overlay) — use explicit pathParent
+	for(const id in auxNodes){
+		const n = auxNodes[id];
+		if(n.pathParent && auxNodes[n.pathParent]) {
+			// draw edge from this node upward to its path parent
+			drawAuxEdge(n, auxNodes[n.pathParent], "path");
+
+		}
+	}
+	// draw nodes
+	for(const id in auxNodes) drawAuxNode(id, auxNodes[id]);
+
+}
+
 
 
 

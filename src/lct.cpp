@@ -180,13 +180,14 @@ extern "C" {
 			int l = lct::t[v].ch[0];
 			int r = lct::t[v].ch[1];
 
-			int type = 0; // 0 = splay parent, 1 = path parent, -1 = none
+			int type = 0; // 0 = none, 1 = path parent, 2 = splay parent
 
-			if(p == -1) type = -1;
-			else if(lct::t[p].ch[0] == v || lct::t[p].ch[1] == v)
-				type = 0; // solid
-			else
-				type = 1; // dashed path-parent
+			if(p != -1) {
+				if(lct::t[p].ch[0] == v || lct::t[p].ch[1] == v)
+					type = 2; // splay parent
+				else
+					type = 1; // path parent
+			}
 
 			if(!first) ss<<",";
 			first=false;
