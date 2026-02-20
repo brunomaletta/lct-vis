@@ -199,6 +199,7 @@ function updateURL(){
 }
 
 function setStatus(msg, ok=false){
+	return;
     const s = document.getElementById("status");
     s.textContent = msg;
     s.style.color = ok ? "#2e7d32" : "#c0392b";
