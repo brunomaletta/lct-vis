@@ -122,24 +122,14 @@ extern "C" {
 		return 1;
 	}
 
-	EMSCRIPTEN_KEEPALIVE int op_cut(int u,int v){
-		if (!alive.count(u) or !alive.count(v)) return 0;
+	EMSCRIPTEN_KEEPALIVE int op_cut(int u){
+		if (!alive.count(u)) return 0;
 
 		lct::access(u);
-		lct::splay(u);
-
-		// ensure v is parent of u
-		if (lct::t[u].ch[0] != v) {
-			lct::access(v);
-			lct::splay(v);
-			if (lct::t[v].ch[0] != u)
-				return 0;
-			u = v;
-		}
 
 		lct::cut(u);
 
-		log_event(11,u,v);
+		log_event(11,u,u);
 		return 1;
 	}
 

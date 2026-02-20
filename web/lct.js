@@ -1806,7 +1806,7 @@ function assignWasmExports(wasmExports) {
   _reset = Module['_reset'] = createExportWrapper('reset', 0);
   _op_create = Module['_op_create'] = createExportWrapper('op_create', 1);
   _op_link = Module['_op_link'] = createExportWrapper('op_link', 2);
-  _op_cut = Module['_op_cut'] = createExportWrapper('op_cut', 2);
+  _op_cut = Module['_op_cut'] = createExportWrapper('op_cut', 1);
   _op_access = Module['_op_access'] = createExportWrapper('op_access', 1);
   _consume_events = Module['_consume_events'] = createExportWrapper('consume_events', 0);
   _dump_aux = Module['_dump_aux'] = createExportWrapper('dump_aux', 0);

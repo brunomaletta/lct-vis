@@ -14,7 +14,12 @@ window.wasmReady = false;
 
 let createdVertices = new Set();
 
-const AUX_RADIUS = 16;
+let mouse = {x:0,y:0};
+let dragStartNode = null;
+let hoverNode = null;
+let hoverEdge = null;
+let dragging = false;
+
 
 // ---------- init ----------
 
@@ -52,32 +57,16 @@ createModule().then(Module => {
 	loadCommandsFromURL();
     rebuildFromCommands();
 
-	canvas.addEventListener("click", e => {
-		const rect = canvas.getBoundingClientRect();
-
-		const x = e.clientX - rect.left;
-		const y = e.clientY - rect.top;
-
-		const v = getNodeAt(x,y);
-
-		if(v!==null){
-			runCommand({type:"access",a:v});
-		}
-	});
-	canvas.addEventListener("mousemove", e => {
-		const rect = canvas.getBoundingClientRect();
-		const x = e.clientX - rect.left;
-		const y = e.clientY - rect.top;
-
-		canvas.style.cursor = getNodeAt(x,y)!==null ? "pointer" : "default";
-	});
-
 	window.addEventListener("hashchange", ()=>{
 		loadCommandsFromURL();
 		rebuildFromCommands();
 	});
 
-
+	canvas.addEventListener("mousemove", onMove);
+	canvas.addEventListener("mousedown", onDown);
+	canvas.addEventListener("mouseup", onUp);
+	canvas.addEventListener("contextmenu", e=>e.preventDefault());
+	canvas.addEventListener("mousedown", onRightDown);
 });
 
 
@@ -96,7 +85,7 @@ function encodeCommands(cmds){
     function tok(c){
         if(c.type==="create") return `c${c.a}`;
         if(c.type==="link")   return `l${c.a}-${c.b}`;
-        if(c.type==="cut")    return `x${c.a}-${c.b}`;
+        if(c.type==="cut")    return `x${c.a}`;
         if(c.type==="access") return `a${c.a}`;
         return "";
     }
@@ -147,8 +136,7 @@ function decodeCommands(str){
         }
 
         if(token[0]==="x"){
-            const [a,b]=token.slice(1).split("-").map(Number);
-            return {type:"cut",a,b};
+            return {type:"cut",a:Number(token.slice(1))};
         }
 
         return null;
@@ -214,12 +202,12 @@ function expandCommand(cmd){
         return out;
     }
 
-    if(cmd.type==="link" || cmd.type==="cut"){
+    if(cmd.type==="link"){
         need(cmd.a);
         need(cmd.b);
     }
 
-    if(cmd.type==="access"){
+    if(cmd.type==="access" || cmd.type == "cut"){
         need(cmd.a);
     }
 
@@ -372,7 +360,7 @@ function executeOnWasm(cmd){
         return ModuleRef.ccall("op_link","number",["number","number"],[cmd.a,cmd.b]);
 
     if(cmd.type==="cut")
-        return ModuleRef.ccall("op_cut","number",["number","number"],[cmd.a,cmd.b]);
+        return ModuleRef.ccall("op_cut","number",["number"],[cmd.a]);
 
     if(cmd.type==="access")
         return ModuleRef.ccall("op_access","number",["number"],[cmd.a]);
@@ -470,16 +458,17 @@ function applyEvent(ev){
     // CUT(a,b)
     if(type===11){
         let A = forest.get(a);
-        if(A && A.parent===b){
-            let B = forest.get(b);
-            B.children.delete(a);
-            A.parent=null;
+        if(A != null){
+			let B = forest.get(A.parent)
+			if (B != null) {
+				B.children.delete(a);
+				A.parent=null;
+			}
         }
     }
 
 	// preferred edge change
 	if(type===20){
-		console.log(a, "now prefers", b);
 		const parent = forest.get(a);
 		if(parent)
 			parent.preferred = (b === -1 ? null : b);
@@ -716,6 +705,33 @@ function renderTree(){
 		}
 	}
 
+
+
+	if(hoverEdge){
+		drawEdge(hoverEdge.u,hoverEdge.v,"#ff4444",3);
+	}
+
+	if(dragging && dragStartNode!==null){
+		const a=forest.get(dragStartNode);
+		ctx.strokeStyle="#4da6ff";
+		ctx.lineWidth=2;
+		ctx.beginPath();
+		ctx.moveTo(a.x,a.y);
+		ctx.lineTo(mouse.x,mouse.y);
+		ctx.stroke();
+
+		drawArrow(
+			ctx,
+			a.x,a.y,
+			mouse.x,
+			mouse.y,
+			"#4da6ff"
+		);
+	}
+
+	if(hoverNode!==null){
+		drawNode(hoverNode,"#ffd54f");
+	}
 
     // nodes
     for(const [id,node] of forest)
@@ -1077,6 +1093,8 @@ function renderAux(skipLayout = false){
 	}
 	// draw nodes
 	for(const id in auxNodes) drawAuxNode(id, auxNodes[id]);
+
+
 }
 
 
@@ -1107,9 +1125,9 @@ function uiLink(){
 function uiCut(){
     const box = document.getElementById("cutBox");
     const nums = parseNumbers(box.value);
-    if(nums.length !== 2) return;
+    if(nums.length !== 1) return;
 
-    if(runCommand({type:"cut",a:nums[0],b:nums[1]}))
+    if(runCommand({type:"cut",a:nums[0]}))
         box.value = "";
 }
 
@@ -1152,16 +1170,110 @@ function stepAnimation(){
     }
 }
 
+function getTreeNodeAt(x,y){
+    const R = 18;
 
-function getNodeAt(x,y){
     for(const [id,node] of forest){
         const dx = node.x - x;
         const dy = node.y - y;
-        if(dx*dx + dy*dy <= 18*18) // radius
+        if(dx*dx + dy*dy <= R*R)
             return id;
     }
     return null;
 }
+
+function distPointSegment(px,py, ax,ay, bx,by){
+    const vx = bx-ax, vy = by-ay;
+    const wx = px-ax, wy = py-ay;
+
+    const t = Math.max(0, Math.min(1,(wx*vx+wy*vy)/(vx*vx+vy*vy)));
+    const cx = ax + t*vx;
+    const cy = ay + t*vy;
+
+    return Math.hypot(px-cx, py-cy);
+}
+
+function getTreeEdgeAt(x,y){
+    const TH = 8;
+
+    for(const [p,node] of forest){
+        for(const c of node.children){
+            const child = forest.get(c);
+
+            if(distPointSegment(x,y,node.x,node.y,child.x,child.y)<TH)
+                return {u:p,v:c};
+        }
+    }
+    return null;
+}
+
+
+function onMove(e){
+    const r = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - r.left;
+    mouse.y = e.clientY - r.top;
+
+    hoverNode = getTreeNodeAt(mouse.x,mouse.y);
+    hoverEdge = getTreeEdgeAt(mouse.x,mouse.y);
+
+    renderTree();
+}
+
+function onDown(e){
+    if(e.button!==0) return;
+
+    const id = getTreeNodeAt(mouse.x,mouse.y);
+
+    if(id!==null){
+		if (!forest.get(id).parent) {
+			dragStartNode=id;
+			dragging=true;
+		}
+    }
+    else{
+        createNode();
+    }
+}
+
+function onUp(e){
+    if(e.button!==0) return;
+
+    if(dragging){
+		dragging=false;
+        const target = getTreeNodeAt(mouse.x,mouse.y);
+
+        if(target!==null && target!==dragStartNode){
+            runCommand({type:"link",a:dragStartNode,b:target});
+        }
+    }
+
+    dragStartNode=null;
+}
+
+function onRightDown(e){
+    if(e.button!==2) return;
+
+	const target = getTreeNodeAt(mouse.x,mouse.y);
+    if(target != null){
+        runCommand({type:"cut",a:target});
+    }
+}
+
+
+function smallestFreeID(){
+    let i=0;
+    while(createdVertices.has(i)) i++;
+    return i;
+}
+
+function createNode(){
+    const id = smallestFreeID();
+    runCommand({type:"create",a:id});
+}
+
+
+
+
 
 // ------------------- New helpers for animation snapshots & tweening -------------------
 
