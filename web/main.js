@@ -270,8 +270,6 @@ function runCommand(cmd){
 		let ev = ModuleRef.ccall("consume_events","string");
 		let parsed = JSON.parse(ev);
 
-		console.log("EVENTS:", parsed);
-
 		for(const e of parsed){
 
 			// apply logical change
@@ -446,6 +444,8 @@ function updateAuxFromWasm(){
 
 function applyEvent(ev){
 
+	console.log("event:", ev);
+
     const [type,a,b] = ev;
 
     // CREATE
@@ -479,6 +479,7 @@ function applyEvent(ev){
 
 	// preferred edge change
 	if(type===20){
+		console.log(a, "now prefers", b);
 		const parent = forest.get(a);
 		if(parent)
 			parent.preferred = (b === -1 ? null : b);

@@ -50,12 +50,14 @@ namespace lct {
 		}
 	}
 	int access(int v) {
-		int last = -1;
+		int last = -1, last_top = -1;
 		for (int w = v; w+1; last = w, splay(v), w = t[v].p) {
 			splay(w), t[w].ch[1] = (last == -1 ? -1 : v);
 
 			// w now prefers last
-			log_event(20, w, last);
+			log_event(20, w, last_top);
+			last_top = w;
+			while (t[last_top].ch[0] != -1) last_top = t[last_top].ch[0];
 		}
 		return last;
 	}
