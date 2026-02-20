@@ -1247,7 +1247,7 @@ function onDown(e){
 
     if(id!==null){
 		dragStartNode=id;
-		if (!forest.get(id).parent) {
+		if (forest.get(id).parent == null) {
 			dragging=true;
 		}
     }
