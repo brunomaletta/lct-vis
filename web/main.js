@@ -234,6 +234,7 @@ function runCommand(cmd){
 	for(const c of expanded){
 
 		// state BEFORE this command step
+		let prevForest = snapshotForestLayout();
 		let prevRaw = snapshotAuxFromWasmRaw();
 		let prevLayout = computeLayoutForSnapshot(prevRaw);
 
@@ -258,15 +259,21 @@ function runCommand(cmd){
 				const nextRaw = snapshotAuxFromWasmRaw();
 				const nextLayout = computeLayoutForSnapshot(nextRaw);
 
+				// snapshot represented tree AFTER event applied
+				const nextForest = snapshotForestLayout();
+
 				newAnimations.push({
 					kind:"rotation",
-					before:prevLayout,
-					after:nextLayout,
+					beforeAux:prevLayout,
+					afterAux:nextLayout,
+					beforeForest:prevForest,
+					afterForest:nextForest,
 					duration:260
 				});
 
 				// next animation starts from here
 				prevLayout = nextLayout;
+				prevForest = nextForest;
 			}
 		}
 	}
@@ -300,10 +307,29 @@ function runCommand(cmd){
 
 function undo(){
     if(commands.length===0) return;
+
+    const beforeForest=snapshotForestLayout();
+    const beforeAux=computeLayoutForSnapshot(snapshotAuxFromWasmRaw());
+
     commands.pop();
-	updateURL();
+    updateURL();
     rebuildFromCommands(false);
+
+    const afterForest=snapshotForestLayout();
+    const afterAux=computeLayoutForSnapshot(snapshotAuxFromWasmRaw());
+
+    animationQueue=[{
+        kind:"rotation",
+        beforeAux:beforeAux,
+        afterAux:afterAux,
+        beforeForest:beforeForest,
+        afterForest:afterForest,
+        duration:320
+    }];
+
+    playAnimation();
 }
+
 
 
 function rebuildFromCommands(){
@@ -668,13 +694,13 @@ function drawAuxNode(id,node){
 }
 
 
-function renderTree(){
+function renderTree(skipLayout=false){
 
     if(!ctx) return;
 
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    computeLayout();
+    if(!skipLayout) computeLayout();
 
     // edges
 	for(const [id,node] of forest){
@@ -1149,7 +1175,7 @@ function stepAnimation(){
     const job = animationQueue.shift();
 
     if(job.kind==="rotation"){
-        animateBetweenSnapshots(job.before, job.after, job.duration)
+		animateRotation(job)
             .then(()=>{
                 animating=false;
                 renderTree();
@@ -1288,6 +1314,23 @@ function createNode(){
 
 // ------------------- New helpers for animation snapshots & tweening -------------------
 
+function snapshotForestLayout(){
+    computeLayout(); // fills node.x node.y
+
+    const snap = {};
+    for(const [id,node] of forest){
+        snap[id]={
+            x:node.x,
+            y:node.y,
+            parent:node.parent,
+            preferred:node.preferred,
+            children:[...node.children]
+        };
+    }
+    return snap;
+}
+
+
 function deepCopyAux(aux) {
     const out = {};
     for (const id in aux) {
@@ -1348,58 +1391,71 @@ function easeInOutCubic(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-// animate between two computed-snapshots (beforeSnap, afterSnap), both produced by computeLayoutForSnapshot.
-// - We set current auxNodes to a copy of afterSnap's structure so edges reflect the final structure,
-//   but initial positions are taken from beforeSnap and interpolated to afterSnap.
-function animateBetweenSnapshots(beforeSnap, afterSnap, duration = 350) {
-    return new Promise(resolve => {
-        // union of node ids
-        const ids = new Set([...Object.keys(beforeSnap).map(Number), ...Object.keys(afterSnap).map(Number)]);
+function interpolateAux(beforeSnap, afterSnap, t){
 
-        // build start/end coordinate maps
-        const startPos = {}, endPos = {};
-        for (const id of ids) {
-            const b = beforeSnap[id] || beforeSnap[String(id)];
-            const a = afterSnap[id] || afterSnap[String(id)];
-            startPos[id] = { x: b ? b.x : (a ? a.x : 0), y: b ? b.y : (a ? a.y : 0) };
-            endPos[id] = { x: a ? a.x : (b ? b.x : 0), y: a ? a.y : (b ? b.y : 0) };
-        }
+    const ids = new Set([
+        ...Object.keys(beforeSnap).map(Number),
+        ...Object.keys(afterSnap).map(Number)
+    ]);
 
-        // Set auxNodes structure to afterSnap (so edges/left/right/pathParent represent the final arrangement)
-        auxNodes = {};
-        for (const id in afterSnap) {
-            auxNodes[id] = Object.assign({}, afterSnap[id]); // copy
-            // initialize positions to startPos (these will be interpolated)
-            const n = auxNodes[id];
-            const s = startPos[id];
-            n.x = s.x; n.y = s.y;
-        }
+    // ensure auxNodes structure matches AFTER structure
+    auxNodes = {};
+    for(const id in afterSnap){
+        auxNodes[id] = {...afterSnap[id]};
+    }
 
-        const startTime = performance.now();
+    // interpolate coordinates
+    for(const id of ids){
 
-        function frame(now) {
-            const t = Math.min(1, (now - startTime) / duration);
-            const easeT = easeInOutCubic(t);
+        const a = beforeSnap[id] || afterSnap[id];
+        const b = afterSnap[id] || beforeSnap[id];
 
-            // interpolate positions onto auxNodes (these are used by renderAux(true))
-            for (const id of ids) {
-                const s = startPos[id];
-                const e = endPos[id];
-                const cur = auxNodes[id];
-                if (!cur) continue;
-                cur.x = s.x + (e.x - s.x) * easeT;
-                cur.y = s.y + (e.y - s.y) * easeT;
+        if(!auxNodes[id]) continue;
+
+        auxNodes[id].x = a.x + (b.x - a.x) * t;
+        auxNodes[id].y = a.y + (b.y - a.y) * t;
+    }
+}
+
+
+function animateRotation(job){
+
+    return new Promise(resolve=>{
+
+        const ids = new Set([
+            ...Object.keys(job.beforeForest),
+            ...Object.keys(job.afterForest)
+        ].map(Number));
+
+        const start = performance.now();
+
+        function frame(now){
+
+            const t=Math.min(1,(now-start)/job.duration);
+            const e=easeInOutCubic(t);
+
+            // ---- AUX ----
+            interpolateAux(job.beforeAux,job.afterAux,e);
+
+            // ---- FOREST ----
+            for(const id of ids){
+
+                const a=job.beforeForest[id]||job.afterForest[id];
+                const b=job.afterForest[id]||job.beforeForest[id];
+
+                const node=forest.get(Number(id));
+                if(!node) continue;
+
+                node.x=a.x+(b.x-a.x)*e;
+                node.y=a.y+(b.y-a.y)*e;
             }
 
-            // RENDER, skipping layout so our interpolated x/y are respected
+            renderTree(true);
             renderAux(true);
 
-            if (t < 1) {
-                requestAnimationFrame(frame);
-            } else {
-                // final snap: set auxNodes to a deep copy of afterSnap so state is exact
-                auxNodes = deepCopyAux(afterSnap);
-                // render final state (allow layout to run if you want final consistency)
+            if(t<1) requestAnimationFrame(frame);
+            else{
+                renderTree(false);
                 renderAux(false);
                 resolve();
             }
@@ -1408,5 +1464,6 @@ function animateBetweenSnapshots(beforeSnap, afterSnap, duration = 350) {
         requestAnimationFrame(frame);
     });
 }
+
 
 
