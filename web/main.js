@@ -227,77 +227,64 @@ function runCommand(cmd){
     // expand into real commands
     const expanded = expandCommand(cmd);
 
-    let lastAnimation = null;
+	// --- single-shot animation: capture before, run all ops, capture after ---
+	const forestBefore = snapshotForestLayout();
+	const auxBefore = computeLayoutForSnapshot(snapshotAuxFromWasmRaw());
 
-	let newAnimations = [];
-
-	for(const c of expanded){
-
-		// state BEFORE this command step
-		let prevForest = snapshotForestLayout();
-		let prevRaw = snapshotAuxFromWasmRaw();
-		let prevLayout = computeLayoutForSnapshot(prevRaw);
-
+	// execute all expanded commands (WASM + apply events)
+	for (const c of expanded) {
 		const ok = executeOnWasm(c);
-		if(!ok){
+		if (!ok) {
 			setStatus("Invalid operation!");
 			rebuildFromCommands(false);
 			return false;
 		}
-
-		let ev = ModuleRef.ccall("consume_events","string");
+		let ev = ModuleRef.ccall("consume_events", "string");
 		let parsed = JSON.parse(ev);
-
-		for(const e of parsed){
-
-			// apply logical change
+		for (const e of parsed) {
 			applyEvent(e);
-
-			// whenever a rotation occurs, capture intermediate state
-			if(e[0] === 30){
-
-				const nextRaw = snapshotAuxFromWasmRaw();
-				const nextLayout = computeLayoutForSnapshot(nextRaw);
-
-				// snapshot represented tree AFTER event applied
-				const nextForest = snapshotForestLayout();
-
-				newAnimations.push({
-					kind:"rotation",
-					beforeAux:prevLayout,
-					afterAux:nextLayout,
-					beforeForest:prevForest,
-					afterForest:nextForest,
-					duration:260
-				});
-
-				// next animation starts from here
-				prevLayout = nextLayout;
-				prevForest = nextForest;
-			}
 		}
 	}
 
-    // commit to history (skip duplicate access)
-    for(const c of expanded){
-        if(isRedundantAccess(c))
-            continue;
-        commands.push(c);
-    }
-
-    updateURL();
-    setStatus("OK", true);
-
-    // rebuild deterministically (instant)
-    rebuildFromCommands(false);
-
-    // animate only last operation
-	if(newAnimations.length>0){
-		animationQueue = newAnimations;
-		playAnimation();
+	// commit to history (skip duplicate access)
+	for (const c of expanded) {
+		if (isRedundantAccess(c)) continue;
+		commands.push(c);
 	}
 
-    return true;
+	updateURL();
+	setStatus("OK", true);
+
+	// capture final snapshots
+	const forestAfter = snapshotForestLayout();
+	const auxAfter = computeLayoutForSnapshot(snapshotAuxFromWasmRaw());
+
+	// if nothing changed just rebuild and return
+	if (JSON.stringify(forestBefore) === JSON.stringify(forestAfter)
+	 && JSON.stringify(auxBefore) === JSON.stringify(auxAfter)) {
+		rebuildFromCommands();
+		return true;
+	}
+
+	// create a single combined animation job (aux + forest)
+	const singleJob = {
+		kind: "rotation",         // your animateRotation supports before/after aux + forest
+		beforeAux: auxBefore,
+		afterAux: auxAfter,
+		beforeForest: forestBefore,
+		afterForest: forestAfter,
+		duration: 360             // tweak duration to taste
+	};
+
+	// set visible forest to starting snapshot so interpolation is coherent
+	applyForestSnapshot(forestBefore);
+
+	// queue & play
+	animationQueue = [ singleJob ];
+	playAnimation();
+
+	return true;
+
 }
 
 
@@ -1167,22 +1154,34 @@ function stepAnimation(){
 
     if(animationQueue.length===0){
         animating=false;
-        renderTree();
-        renderAux();
+        // After all animations finished, rebuild authoritative state so
+        // wasm + aux + forest are guaranteed consistent with commands.
+        rebuildFromCommands();
         return;
     }
 
     const job = animationQueue.shift();
 
-    if(job.kind==="rotation"){
-		animateRotation(job)
-            .then(()=>{
-                animating=false;
-                renderTree();
-                renderAux();
-            });
+	console.log("HERE");
+
+    if(job.kind === "rotation"){
+        animateRotation(job).then(() => {
+            // proceed to next animation
+            stepAnimation();
+        });
+    }
+    else if(job.kind === "forest"){
+        animateForest(job).then(() => {
+            stepAnimation();
+        });
+    }
+    else if(job.kind === "aux"){
+        animateAux(job).then(() => {
+            stepAnimation();
+        });
     }
 }
+
 
 function getTreeNodeAt(x,y){
     const R = 18;
@@ -1313,6 +1312,25 @@ function createNode(){
 
 
 // ------------------- New helpers for animation snapshots & tweening -------------------
+
+function applyForestSnapshot(snap){
+    // snap: { id: { x,y,parent,preferred,children:[..] }, ... }
+    forest = new Map();
+    createdVertices.clear();
+
+    for(const idStr of Object.keys(snap)){
+        const id = Number(idStr);
+        const s = snap[idStr];
+        createdVertices.add(id);
+        forest.set(id, {
+            parent: s.parent,
+            children: new Set(s.children || []),
+            preferred: s.preferred,
+            x: s.x,
+            y: s.y
+        });
+    }
+}
 
 function snapshotForestLayout(){
     computeLayout(); // fills node.x node.y
