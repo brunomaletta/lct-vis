@@ -3,34 +3,394 @@
 <head>
 <meta charset="utf-8">
 <title>LCT Visualizer</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+
+<style>
+
+html, body{
+  height:100%;
+  background:#111418;
+}
+
+
+
+:root{
+
+  /* PAGE (light dark — main readability surface) */
+  --bg:#1e2329;
+
+  /* PANELS (cards you read text on) */
+  --panel:#262c34;
+  --panel-2:#2e353f;
+
+  /* CANVAS (deep focus area) */
+  --canvas:#15181d;
+
+  /* borders */
+  --border:#3a424d;
+
+  /* TEXT */
+  --text:#f3f6fb;
+  --muted:#c2ccd6;
+  --subtle:#98a6b6;
+
+  /* accents */
+  --brand:#4ea1ff;
+  --accent:#22c55e;
+  --danger:#ef4444;
+
+  --radius:12px;
+  --shadow:0 8px 18px rgba(0,0,0,.30);
+}
+
+
+
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+}
+
+
+/* header */
+
+.header{
+  display:flex;
+  align-items:center;
+  padding:14px 22px;
+  border-bottom:1px solid var(--border);
+  background:#070c19;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  font-weight:600;
+  letter-spacing:.3px;
+}
+
+.logo{
+  width:38px;height:38px;border-radius:10px;
+  background:linear-gradient(135deg,#2563eb,#60a5fa);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:16px;
+}
+
+/* layout */
+
+.container{
+  display:grid;
+  grid-template-columns:320px 1fr;
+  gap:18px;
+  padding:18px;
+}
+
+/* side panel */
+
+.panel{
+  width:260px;
+  min-width:260px;
+  max-width:260px;
+  flex:0 0 260px;
+}
+
+.panel{
+  background:var(--panel);
+}
+input{
+  background:var(--panel-2);
+}
+
+
+.panel-title{
+  color:var(--subtle);
+  font-weight:600;
+  margin-bottom:12px;
+}
+
+
+/* inputs */
+
+.row{display:flex;gap:8px;margin-bottom:10px;}
+
+input{
+  flex:1;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:9px 11px;
+  color:var(--text);
+  font-size:14px;
+}
+
+input{
+  font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing:.02em;
+}
+
+input::placeholder{
+  color:#7f8b99;
+}
+
+input:focus{
+  border-color:var(--brand);
+  box-shadow:0 0 0 2px rgba(78,161,255,.25);
+}
+
+
+/* buttons */
+
+/* buttons layout */
+
+.row{
+  display:grid;
+  grid-template-columns: minmax(140px, 200px) auto;
+  justify-content:start;
+  gap:8px;
+  margin-bottom:10px;
+}
+
+
+/* base button */
+.btn{
+  background:var(--panel-2);
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:8px;
+  height:34px;
+  cursor:pointer;
+  font-weight:600;
+  letter-spacing:.02em;
+  justify-content:flex-start;
+  transition:
+    background .15s,
+    border-color .15s,
+    transform .05s,
+    box-shadow .15s;
+}
+
+.btn{
+  text-align:left;
+  padding-left:12px;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+}
+.btn{
+  min-width:88px;
+  width:88px;
+}
+
+/* hover */
+.btn:hover{
+  background:#3a424d;
+  border-color:#4a5563;
+}
+
+/* press */
+.btn:active{
+  transform:translateY(1px);
+}
+
+/* keyboard focus */
+.btn:focus-visible{
+  outline:none;
+  border-color:var(--brand);
+  box-shadow:0 0 0 2px rgba(78,161,255,.25);
+}
+
+.btn.secondary{
+  color:#fca5a5;
+  border-color:#5b2a2a;
+}
+
+.btn.secondary:hover{
+  background:#3a1f1f;
+  border-color:#7f3b3b;
+}
+
+.btn::before{
+  width:16px;
+  display:inline-block;
+  text-align:center;
+}
+
+.btn[onclick*="Create"]::before{content:"＋";}
+.btn[onclick*="Link"]::before{content:"↗";}
+.btn[onclick*="Cut"]::before{content:"✕";}
+.btn[onclick*="Access"]::before{content:"◎";}
+.btn.secondary::before{content:"↶";}
+
+
+
+/* canvas area */
+
+.canvas-wrap{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.canvas-surface{
+  background:var(--canvas);
+  border-radius:16px;
+  border:1px solid var(--border);
+  padding:12px;
+  display:flex;
+  gap:14px;
+  min-height:540px;
+}
+
+.canvas-col{
+  flex:1;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+#treeCanvas,#auxCanvas{
+  width:100%;
+  height:440px;
+  border-radius:12px;
+  background:transparent;
+}
+
+/* status */
+
+.status{
+  font-size:13px;
+  color:var(--muted);
+  display:flex;
+  gap:18px;
+  padding-left:6px;
+}
+
+.divider{
+  width:1px;
+  background:linear-gradient(
+      to bottom,
+      transparent,
+      #3a424d 20%,
+      #3a424d 80%,
+      transparent
+  );
+  opacity:.8;
+}
+
+.canvas-panel{
+  display:flex;
+  flex-direction:column;
+  flex:1;
+  gap:8px;
+}
+
+/* title above canvas */
+.canvas-title{
+  font-size:13px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--subtle);
+  padding-left:4px;
+  user-select:none;
+}
+
+/* make canvas fill nicely */
+.canvas-panel canvas{
+  width:100%;
+  height:440px;
+  border-radius:12px;
+  background:transparent;
+}
+
+.canvas-panel:hover .canvas-title{
+  color:var(--text);
+}
+
+
+
+code{
+  background:#0a0f1f;
+  padding:2px 6px;
+  border-radius:6px;
+  color:#9fb5ff;
+}
+
+</style>
+
+
 </head>
 <body>
 
-<h2>Commands</h2>
+<div class="header">
+  <div class="brand">
+    <div class="logo">LCT</div>
+    <div>
+      <div>LCT-vis</div>
+      <div style="font-size:12px;color:var(--muted)">Link-Cut Tree Visualizer</div>
+    </div>
+  </div>
+</div>
 
-<input id="createBox" placeholder="createTree(i)">
-<button onclick="uiCreate()">Run</button>
-<br><br>
+<div class="container">
 
-<input id="linkBox" placeholder="link(a,b)">
-<button onclick="uiLink()">Run</button>
-<br><br>
+  <!-- LEFT PANEL -->
+  <div class="panel">
 
-<input id="cutBox" placeholder="cut(a)">
-<button onclick="uiCut()">Run</button>
-<br><br>
+    <div class="panel-title">Commands</div>
 
-<input id="accessBox" placeholder="access(a)">
-<button onclick="uiAccess()">Run</button>
-<br><br>
+    <div class="row">
+      <input id="createBox" placeholder="v">
+      <button class="btn" onclick="uiCreate()">Create</button>
+    </div>
 
-<button onclick="undo()">Undo</button>
-<hr>
+    <div class="row">
+      <input id="linkBox" placeholder="v u">
+      <button class="btn" onclick="uiLink()">Link</button>
+    </div>
 
-<div id="status" style="margin-top:10px; height:20px; color:#c0392b; font-weight:bold;"></div>
+    <div class="row">
+      <input id="accessBox" placeholder="v">
+      <button class="btn" onclick="uiAccess()">Access</button>
+    </div>
 
-<canvas id="treeCanvas" width="600" height="500"></canvas>
-<canvas id="auxCanvas" width="600" height="500"></canvas>
+    <div class="row">
+      <input id="cutBox" placeholder="v">
+      <button class="btn" onclick="uiCut()">Cut</button>
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--border);margin:14px 0">
+
+    <button class="btn secondary" onclick="undo()">Undo</button>
+
+  </div>
+
+  <!-- CANVAS AREA -->
+  <div class="canvas-wrap">
+
+	<div class="canvas-surface">
+
+	  <div class="canvas-panel">
+		<div class="canvas-title">represented tree</div>
+		<canvas id="treeCanvas"></canvas>
+	  </div>
+
+	  <div class="divider"></div>
+
+	  <div class="canvas-panel" style="width:360px">
+		<div class="canvas-title">auxiliary tree</div>
+		<canvas id="auxCanvas"></canvas>
+	  </div>
+
+	</div>
+
+  </div>
+
+</div>
+
+
 
 <script>
 var Module = {

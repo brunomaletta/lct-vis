@@ -17,10 +17,27 @@ let createdVertices = new Set();
 let mouse = {x:0,y:0};
 let dragStartNode = null;
 let hoverNode = null;
-let hoverEdge = null;
 let dragging = false;
 let mouseDownPos = null;
 const CLICK_EPS = 6; // pixels
+
+const COLORS = {
+    nodeFill: "#1f2933",
+    nodeBorder: "#e5e7eb",
+    nodeText: "#ffffff",
+
+    nodeHover: "#334155",
+    nodeActive: "#3b82f6",
+
+    auxFill: "#2b3440",
+    auxBorder: "#d0d7ff",
+    auxText: "#ffffff",
+
+    edge: "#94a3b8",
+    edgePreferred: "#ff7a7a",
+    edgeAux: "#d0d7ff",
+    edgePath: "#a8b3c2"
+};
 
 // ---------- init ----------
 
@@ -68,10 +85,24 @@ createModule().then(Module => {
 	canvas.addEventListener("mouseup", onUp);
 	canvas.addEventListener("contextmenu", e=>e.preventDefault());
 	canvas.addEventListener("mousedown", onRightDown);
+
+	canvas.addEventListener("mouseleave", ()=>{
+		hoverNode = null;
+		hoverEdge = null;
+		canvas.style.cursor = "default";
+	});
 });
 
 
 // ---------- command system ----------
+
+function updateCursor(){
+    if(hoverNode !== null)
+        canvas.style.cursor = "pointer";
+    else
+        canvas.style.cursor = "default";
+}
+
 
 function loadCommandsFromURL(){
 
@@ -535,6 +566,9 @@ function computeLayout(){
         x = layoutDFS(r,0,x);
         x += 80;
     }
+
+    // keep everything visible inside the canvas
+    fitToTreeCanvas(36);
 }
 
 function layoutDFS(v,depth,x){
@@ -600,19 +634,25 @@ function drawEdge(a,b){
 
 function drawNode(id,node){
 
+    const isHover = hoverNode === id;
+
     ctx.beginPath();
     ctx.arc(node.x,node.y,18,0,Math.PI*2);
-    ctx.fillStyle="white";
+
+    ctx.fillStyle = isHover ? COLORS.nodeHover : COLORS.nodeFill;
     ctx.fill();
-    ctx.strokeStyle="#000";
+
+    ctx.lineWidth = isHover ? 3 : 2;
+    ctx.strokeStyle = COLORS.nodeBorder;
     ctx.stroke();
 
-    ctx.fillStyle="#000";
+    ctx.fillStyle = COLORS.nodeText;
     ctx.textAlign="center";
     ctx.textBaseline="middle";
     ctx.font="14px sans-serif";
     ctx.fillText(id,node.x,node.y);
 }
+
 
 function drawAuxEdge(a,b,kind){
 
@@ -621,7 +661,7 @@ function drawAuxEdge(a,b,kind){
     // ensure arrow always points upward (toward ancestor)
     let from = a, to = b;
 
-    const color = (kind==="path") ? "#999" : "#000";
+	const color = (kind==="path") ? COLORS.edgePath : COLORS.edgeAux;
 
     // direction vector
     const dx = to.x - from.x;
@@ -666,19 +706,26 @@ function drawAuxEdge(a,b,kind){
 
 
 function drawAuxNode(id,node){
+
+    const isHover = hoverNode === id;
+
     auxCtx.beginPath();
     auxCtx.arc(node.x,node.y,16,0,Math.PI*2);
-    auxCtx.fillStyle="#eef";
+
+    auxCtx.fillStyle = isHover ? COLORS.nodeHover : COLORS.auxFill;
     auxCtx.fill();
-    auxCtx.strokeStyle="#000";
+
+    auxCtx.lineWidth = isHover ? 3 : 2;
+    auxCtx.strokeStyle = COLORS.auxBorder;
     auxCtx.stroke();
 
-    auxCtx.fillStyle="#000";
+    auxCtx.fillStyle = COLORS.auxText;
     auxCtx.textAlign="center";
     auxCtx.textBaseline="middle";
     auxCtx.font="13px sans-serif";
     auxCtx.fillText(id,node.x,node.y);
 }
+
 
 
 function renderTree(skipLayout=false){
@@ -695,10 +742,10 @@ function renderTree(skipLayout=false){
 			const child = forest.get(c);
 
 			if(node.preferred === c){
-				ctx.strokeStyle="#ff4d4d";   // preferred path = red
+				ctx.strokeStyle = COLORS.edgePreferred; // preferred path = red
 				ctx.lineWidth=4;
 			}else{
-				ctx.strokeStyle="#888";
+				ctx.strokeStyle = COLORS.edge;
 				ctx.lineWidth=2;
 			}
 
@@ -708,10 +755,6 @@ function renderTree(skipLayout=false){
 	}
 
 
-
-	if(hoverEdge){
-		drawEdge(hoverEdge.u,hoverEdge.v,"#ff4444",3);
-	}
 
 	if(dragging && dragStartNode!==null){
 		const a=forest.get(dragStartNode);
@@ -933,6 +976,49 @@ function resolveBlockPositions(blocks, desired) {
 }
 
 // ---------- Fit & center helper + small tuning ----------
+
+function fitToTreeCanvas(padding = 36) {
+    if (!canvas) return;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [id, node] of forest) {
+        if (node.x === undefined || node.y === undefined) continue;
+        minX = Math.min(minX, node.x);
+        maxX = Math.max(maxX, node.x);
+        minY = Math.min(minY, node.y);
+        maxY = Math.max(maxY, node.y);
+    }
+
+    if (minX === Infinity) return; // nothing to fit
+
+    const contentW = Math.max(1, maxX - minX);
+    const contentH = Math.max(1, maxY - minY);
+
+    // NOTE: canvas.width is in *device pixels* after fixHiDPI().
+    // That's OK because you also use ctx.setTransform(dpr, ...) so logical drawing coords match CSS pixels.
+    const availW = Math.max(10, canvas.width - 2 * padding);
+    const availH = Math.max(10, canvas.height - 2 * padding);
+
+    // don't scale up beyond 1 (keeps spacing readable)
+    const scale = Math.min(1, Math.min(availW / contentW, availH / contentH));
+
+    const contentCenterX = (minX + maxX) / 2;
+    const contentCenterY = (minY + maxY) / 2;
+
+    const canvasCenterX = canvas.width / 2;
+    const canvasCenterY = canvas.height / 2;
+
+    const tx = canvasCenterX - (contentCenterX * scale);
+    const ty = canvasCenterY - (contentCenterY * scale);
+
+    // apply transform: overwrite node.x/node.y to transformed coords
+    for (const [id, node] of forest) {
+        if (node.x === undefined || node.y === undefined) continue;
+        node.x = Math.round(node.x * scale + tx);
+        node.y = Math.round(node.y * scale + ty);
+    }
+}
+
 
 // Tweak these to control how strongly child blocks are pulled under parent node
 const PULL_WEIGHT = 0.65;      // currently we used 0.65 (child moves 65% toward parent's pixel x)
@@ -1206,20 +1292,6 @@ function distPointSegment(px,py, ax,ay, bx,by){
     return Math.hypot(px-cx, py-cy);
 }
 
-function getTreeEdgeAt(x,y){
-    const TH = 8;
-
-    for(const [p,node] of forest){
-        for(const c of node.children){
-            const child = forest.get(c);
-
-            if(distPointSegment(x,y,node.x,node.y,child.x,child.y)<TH)
-                return {u:p,v:c};
-        }
-    }
-    return null;
-}
-
 
 function onMove(e){
     const r = canvas.getBoundingClientRect();
@@ -1227,7 +1299,8 @@ function onMove(e){
     mouse.y = e.clientY - r.top;
 
     hoverNode = getTreeNodeAt(mouse.x,mouse.y);
-    hoverEdge = getTreeEdgeAt(mouse.x,mouse.y);
+
+	updateCursor();
 
     renderTree();
 }
