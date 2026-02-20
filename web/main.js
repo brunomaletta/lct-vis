@@ -19,7 +19,8 @@ let dragStartNode = null;
 let hoverNode = null;
 let hoverEdge = null;
 let dragging = false;
-
+let mouseDownPos = null;
+const CLICK_EPS = 6; // pixels
 
 // ---------- init ----------
 
@@ -432,7 +433,7 @@ function updateAuxFromWasm(){
 
 function applyEvent(ev){
 
-	console.log("event:", ev);
+	//console.log("event:", ev);
 
     const [type,a,b] = ev;
 
@@ -1222,33 +1223,56 @@ function onMove(e){
 function onDown(e){
     if(e.button!==0) return;
 
-    const id = getTreeNodeAt(mouse.x,mouse.y);
+
+	const r = canvas.getBoundingClientRect();
+	mouse.x = e.clientX - r.left;
+	mouse.y = e.clientY - r.top;
+
+	mouseDownPos = {x:mouse.x, y:mouse.y};
+
+	const id = getTreeNodeAt(mouse.x,mouse.y);
 
     if(id!==null){
+		dragStartNode=id;
 		if (!forest.get(id).parent) {
-			dragStartNode=id;
 			dragging=true;
 		}
     }
     else{
-        createNode();
+		dragStartNode=null;
+		dragging=false;
     }
 }
 
 function onUp(e){
     if(e.button!==0) return;
 
-    if(dragging){
-		dragging=false;
-        const target = getTreeNodeAt(mouse.x,mouse.y);
+    const dx = mouse.x - mouseDownPos.x;
+    const dy = mouse.y - mouseDownPos.y;
+    const moved = Math.hypot(dx,dy) > CLICK_EPS;
 
-        if(target!==null && target!==dragStartNode){
-            runCommand({type:"link",a:dragStartNode,b:target});
-        }
+    const target = getTreeNodeAt(mouse.x,mouse.y);
+
+    // --- CASE 1: click on empty → create ---
+    if(dragStartNode == null && !moved){
+        createNode();
     }
 
+    // --- CASE 2: click same node → ACCESS ---
+    else if(dragStartNode!==null && target===dragStartNode && !moved){
+        runCommand({type:"access",a:dragStartNode});
+    }
+
+    // --- CASE 3: drag node to node → LINK ---
+    else if(dragStartNode!==null && target!==null && target!==dragStartNode){
+        runCommand({type:"link",a:dragStartNode,b:target});
+    }
+
+    dragging=false;
     dragStartNode=null;
+    mouseDownPos=null;
 }
+
 
 function onRightDown(e){
     if(e.button!==2) return;
