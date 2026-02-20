@@ -20,15 +20,27 @@ const AUX_RADIUS = 16;
 
 let auxCanvas, auxCtx;
 
+function fixHiDPI(canvas, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
 createModule().then(Module => {
 	ModuleRef = Module;
     window.wasmReady = true;
 
     canvas = document.getElementById("treeCanvas");
     ctx = canvas.getContext("2d");
+	fixHiDPI(canvas, ctx);
 
     auxCanvas = document.getElementById("auxCanvas");
     auxCtx = auxCanvas.getContext("2d");
+	fixHiDPI(auxCanvas, auxCtx);
 
     // IMPORTANT
     ModuleRef.ccall("reset", null, [], []);
@@ -230,7 +242,7 @@ function runCommand(cmd){
         return false;
     }
 
-    // rebuild current state in wasm
+    // rebuild current state in wasm (authoritative)
     ModuleRef.ccall("reset", null, [], []);
     for(const c of commands)
         executeOnWasm(c);
@@ -238,28 +250,74 @@ function runCommand(cmd){
     // expand into real commands
     const expanded = expandCommand(cmd);
 
-    // try executing all of them
+    let lastAnimation = null;
+
+	let newAnimations = [];
+
+	for(const c of expanded){
+
+		// state BEFORE this command step
+		let prevRaw = snapshotAuxFromWasmRaw();
+		let prevLayout = computeLayoutForSnapshot(prevRaw);
+
+		const ok = executeOnWasm(c);
+		if(!ok){
+			setStatus("Invalid operation!");
+			rebuildFromCommands(false);
+			return false;
+		}
+
+		let ev = ModuleRef.ccall("consume_events","string");
+		let parsed = JSON.parse(ev);
+
+		console.log("EVENTS:", parsed);
+
+		for(const e of parsed){
+
+			// apply logical change
+			applyEvent(e);
+
+			// whenever a rotation occurs, capture intermediate state
+			if(e[0] === 30){
+
+				const nextRaw = snapshotAuxFromWasmRaw();
+				const nextLayout = computeLayoutForSnapshot(nextRaw);
+
+				newAnimations.push({
+					kind:"rotation",
+					before:prevLayout,
+					after:nextLayout,
+					duration:260
+				});
+
+				// next animation starts from here
+				prevLayout = nextLayout;
+			}
+		}
+	}
+
+    // commit to history (skip duplicate access)
     for(const c of expanded){
-        const ok = executeOnWasm(c);
-        if(!ok){
-            setStatus("Invalid operation!");
-            rebuildFromCommands();
-            return false;
-        }
+        if(isRedundantAccess(c))
+            continue;
+        commands.push(c);
     }
 
-	// commit to history (skip duplicate access)
-	for(const c of expanded){
-		if(isRedundantAccess(c))
-			continue;
-		commands.push(c);
-	}
-	updateURL();
-
+    updateURL();
     setStatus("OK", true);
-    rebuildFromCommands();
+
+    // rebuild deterministically (instant)
+    rebuildFromCommands(false);
+
+    // animate only last operation
+	if(newAnimations.length>0){
+		animationQueue = newAnimations;
+		playAnimation();
+	}
+
     return true;
 }
+
 
 
 
@@ -269,41 +327,43 @@ function undo(){
     if(commands.length===0) return;
     commands.pop();
 	updateURL();
-    rebuildFromCommands();
+    rebuildFromCommands(false);
 }
+
 
 function rebuildFromCommands(){
 
-	createdVertices.clear();
-
-	animationQueue = [];
+    createdVertices.clear();
+    animationQueue = [];
+    animating = false;
 
     forest = new Map();
 
     ModuleRef.ccall("reset", null, [], []);
 
     for(const cmd of commands){
-		if(cmd.type==="create")
-			createdVertices.add(cmd.a);
+
+        if(cmd.type==="create")
+            createdVertices.add(cmd.a);
+
+        // execute in wasm
         executeOnWasm(cmd);
 
+        // consume events and APPLY ONLY (no animation ever here)
         let ev = ModuleRef.ccall("consume_events","string");
         let parsed = JSON.parse(ev);
 
-		for(const ev of parsed){
-			if(ev[0] === 30)
-				animationQueue.push(ev);   // animate rotations
-			else
-				applyEvent(ev);            // apply immediately
-		}
-
+        for(const e of parsed){
+            applyEvent(e);
+        }
     }
 
     updateAuxFromWasm();
     renderTree();
     renderAux();
-    playAnimation();
 }
+
+
 
 function executeOnWasm(cmd){
 
@@ -350,7 +410,7 @@ function updateAuxFromWasm(){
     const json = ModuleRef.UTF8ToString(ptr);
     const data = JSON.parse(json);
 
-	console.log(data);
+	//console.log(data);
 
     auxNodes = {};
 
@@ -991,10 +1051,14 @@ function computeAuxLayoutCombined() {
 }
 
 
-function renderAux(){
+function renderAux(skipLayout = false){
     if(!auxCtx) return;
     auxCtx.clearRect(0,0,auxCanvas.width,auxCanvas.height);
-    computeAuxLayoutCombined();
+
+    // During animation we will pass skipLayout = true so we DON'T run the
+    // layout (which would overwrite the interpolated x/y values).
+    if(!skipLayout)
+        computeAuxLayoutCombined();
 
 	// draw splay edges
 	for(const id in auxNodes){
@@ -1008,13 +1072,12 @@ function renderAux(){
 		if(n.pathParent && auxNodes[n.pathParent]) {
 			// draw edge from this node upward to its path parent
 			drawAuxEdge(n, auxNodes[n.pathParent], "path");
-
 		}
 	}
 	// draw nodes
 	for(const id in auxNodes) drawAuxNode(id, auxNodes[id]);
-
 }
+
 
 
 
@@ -1067,6 +1130,7 @@ function playAnimation(){
 }
 
 function stepAnimation(){
+
     if(animationQueue.length===0){
         animating=false;
         renderTree();
@@ -1074,13 +1138,19 @@ function stepAnimation(){
         return;
     }
 
-    const ev = animationQueue.shift();
-    applyEvent(ev);
+    const job = animationQueue.shift();
 
-    renderAux();
-
-    setTimeout(stepAnimation, 350); // speed here
+    if(job.kind==="rotation"){
+		console.log("ANIMATING ROTATION");
+        animateBetweenSnapshots(job.before, job.after, job.duration)
+            .then(()=>{
+                animating=false;
+                renderTree();
+                renderAux();
+            });
+    }
 }
+
 
 function getNodeAt(x,y){
     for(const [id,node] of forest){
@@ -1091,4 +1161,128 @@ function getNodeAt(x,y){
     }
     return null;
 }
+
+// ------------------- New helpers for animation snapshots & tweening -------------------
+
+function deepCopyAux(aux) {
+    const out = {};
+    for (const id in aux) {
+        const n = aux[id];
+        out[id] = {
+            id: n.id,
+            splayParent: n.splayParent == null ? null : Number(n.splayParent),
+            pathParent: n.pathParent == null ? null : Number(n.pathParent),
+            left: n.left == null ? null : Number(n.left),
+            right: n.right == null ? null : Number(n.right),
+            localX: n.localX == null ? 0 : n.localX,
+            localY: n.localY == null ? 0 : n.localY,
+            x: n.x == null ? 0 : n.x,
+            y: n.y == null ? 0 : n.y
+        };
+    }
+    return out;
+}
+
+// read raw aux from wasm and return a snapshot object (id -> node) WITHOUT computed pixel coords
+function snapshotAuxFromWasmRaw() {
+    const ptr = ModuleRef._dump_aux();
+    const json = ModuleRef.UTF8ToString(ptr);
+    const data = JSON.parse(json);
+
+    const snap = {};
+    for (const [v, p, l, r, type] of data) {
+        snap[v] = {
+            id: Number(v),
+            splayParent: type === 2 ? (p === -1 ? null : Number(p)) : null,
+            pathParent: type === 1 ? (p === -1 ? null : Number(p)) : null,
+            left: l === -1 ? null : Number(l),
+            right: r === -1 ? null : Number(r),
+            // localX/localY/x/y will be filled by layout step
+            localX: 0, localY: 0, x: 0, y: 0
+        };
+    }
+    return snap;
+}
+
+// compute the pixel layout for a snapshot using your existing layout pipeline
+// (temporarily replaces auxNodes, runs computeAuxLayoutCombined, then restores auxNodes).
+function computeLayoutForSnapshot(snapshot) {
+    const saved = auxNodes;
+    auxNodes = snapshot;
+    try {
+        computeAuxLayoutCombined(); // this will fill snapshot nodes' x,y
+    } finally {
+        auxNodes = saved;
+    }
+    // ensure numbers are numeric (and copy back)
+    const out = deepCopyAux(snapshot);
+    return out;
+}
+
+// easing function
+function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// animate between two computed-snapshots (beforeSnap, afterSnap), both produced by computeLayoutForSnapshot.
+// - We set current auxNodes to a copy of afterSnap's structure so edges reflect the final structure,
+//   but initial positions are taken from beforeSnap and interpolated to afterSnap.
+function animateBetweenSnapshots(beforeSnap, afterSnap, duration = 350) {
+    return new Promise(resolve => {
+        // union of node ids
+        const ids = new Set([...Object.keys(beforeSnap).map(Number), ...Object.keys(afterSnap).map(Number)]);
+
+        // build start/end coordinate maps
+        const startPos = {}, endPos = {};
+        for (const id of ids) {
+            const b = beforeSnap[id] || beforeSnap[String(id)];
+            const a = afterSnap[id] || afterSnap[String(id)];
+            startPos[id] = { x: b ? b.x : (a ? a.x : 0), y: b ? b.y : (a ? a.y : 0) };
+            endPos[id] = { x: a ? a.x : (b ? b.x : 0), y: a ? a.y : (b ? b.y : 0) };
+        }
+
+        // Set auxNodes structure to afterSnap (so edges/left/right/pathParent represent the final arrangement)
+        auxNodes = {};
+        for (const id in afterSnap) {
+            auxNodes[id] = Object.assign({}, afterSnap[id]); // copy
+            // initialize positions to startPos (these will be interpolated)
+            const n = auxNodes[id];
+            const s = startPos[id];
+            n.x = s.x; n.y = s.y;
+        }
+
+        const startTime = performance.now();
+
+        function frame(now) {
+            const t = Math.min(1, (now - startTime) / duration);
+            const easeT = easeInOutCubic(t);
+
+            // interpolate positions onto auxNodes (these are used by renderAux(true))
+            for (const id of ids) {
+                const s = startPos[id];
+                const e = endPos[id];
+                const cur = auxNodes[id];
+                if (!cur) continue;
+                cur.x = s.x + (e.x - s.x) * easeT;
+                cur.y = s.y + (e.y - s.y) * easeT;
+            }
+
+            // RENDER, skipping layout so our interpolated x/y are respected
+            renderAux(true);
+
+            if (t < 1) {
+                requestAnimationFrame(frame);
+            } else {
+                // final snap: set auxNodes to a deep copy of afterSnap so state is exact
+                auxNodes = deepCopyAux(afterSnap);
+                // render final state (allow layout to run if you want final consistency)
+                renderAux(false);
+                resolve();
+            }
+        }
+
+        requestAnimationFrame(frame);
+    });
+}
+
 
