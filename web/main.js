@@ -174,18 +174,6 @@ function setStatus(msg, ok=false){
 }
 
 
-function renderState(){
-
-    console.clear();
-
-    for(const [id,node] of forest){
-        console.log(
-            id,
-            "parent:",node.parent,
-            "children:",[...node.children]
-        );
-    }
-}
 
 function expandCommand(cmd){
 
@@ -774,7 +762,7 @@ function computeSplayLayouts() {
         function dfs(u, depth) {
             if (u == null) return;
             const n = auxNodes[u];
-            if (!n) return;
+            if (n == null) return;
             if (n.left != null) dfs(n.left, depth + 1);
             n.localX = nextX.x++;
             n.localY = depth;
@@ -838,7 +826,7 @@ function buildBlockGraph(blocks) {
 
     for (const id in auxNodes) {
         const n = auxNodes[id];
-        if (!n) continue;
+        if (n == null) continue;
         // use explicit pathParent exported by WASM
         const p = n.pathParent;
         if (p != null && p !== -1) {
@@ -1081,13 +1069,13 @@ function renderAux(skipLayout = false){
 	// draw splay edges
 	for(const id in auxNodes){
 		const n = auxNodes[id];
-		if(n.left) drawAuxEdge(n, auxNodes[n.left], "splay");
-		if(n.right) drawAuxEdge(n, auxNodes[n.right], "splay");
+		if(n.left != null) drawAuxEdge(n, auxNodes[n.left], "splay");
+		if(n.right != null) drawAuxEdge(n, auxNodes[n.right], "splay");
 	}
 	// draw path-parent edges (overlay) — use explicit pathParent
 	for(const id in auxNodes){
 		const n = auxNodes[id];
-		if(n.pathParent && auxNodes[n.pathParent]) {
+		if(n.pathParent != null && auxNodes[n.pathParent] != null) {
 			// draw edge from this node upward to its path parent
 			drawAuxEdge(n, auxNodes[n.pathParent], "path");
 		}
@@ -1161,7 +1149,6 @@ function stepAnimation(){
     const job = animationQueue.shift();
 
     if(job.kind==="rotation"){
-		console.log("ANIMATING ROTATION");
         animateBetweenSnapshots(job.before, job.after, job.duration)
             .then(()=>{
                 animating=false;
