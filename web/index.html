@@ -51,6 +51,7 @@ body{
   margin:0;
   background:var(--bg);
   color:var(--text);
+  font-family:"Inter",system-ui,-apple-system,sans-serif;
 }
 
 
@@ -95,20 +96,21 @@ body{
   min-width:260px;
   max-width:260px;
   flex:0 0 260px;
-}
-
-.panel{
   background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:16px;
+  box-shadow:var(--shadow);
+  align-self:start;
 }
-input{
-  background:var(--panel-2);
-}
-
 
 .panel-title{
   color:var(--subtle);
   font-weight:600;
   margin-bottom:12px;
+  font-size:12px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
 }
 
 
@@ -263,9 +265,135 @@ input:focus{
 .status{
   font-size:13px;
   color:var(--muted);
+  min-height:1.25em;
+  margin-top:10px;
+  padding:8px 10px;
+  border-radius:8px;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  transition:color .15s,border-color .15s,background .15s;
+}
+
+.status.status-ok{
+  color:#86efac;
+  border-color:#166534;
+  background:#14281a;
+}
+
+.status.status-err{
+  color:#fca5a5;
+  border-color:#7f1d1d;
+  background:#2a1212;
+}
+
+.help{
+  margin-top:14px;
+  padding-top:12px;
+  border-top:1px solid var(--border);
+  font-size:12px;
+  line-height:1.5;
+  color:var(--muted);
+}
+
+.help strong{
+  color:var(--text);
+  font-weight:600;
+}
+
+.help ul{
+  margin:8px 0 0;
+  padding-left:18px;
+}
+
+.legend{
   display:flex;
-  gap:18px;
-  padding-left:6px;
+  flex-wrap:wrap;
+  gap:10px 14px;
+  margin-top:10px;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.legend-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.legend-swatch{
+  width:22px;
+  height:3px;
+  border-radius:2px;
+}
+
+.legend-swatch.preferred{ background:var(--danger); height:4px; }
+.legend-swatch.tree{ background:#94a3b8; }
+.legend-swatch.splay{ background:#d0d7ff; }
+.legend-swatch.path{
+  background:repeating-linear-gradient(90deg,#a8b3c2 0 5px,transparent 5px 9px);
+}
+
+.panel-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:10px;
+}
+
+.panel-actions .btn{
+  flex:1;
+  min-width:72px;
+  width:auto;
+  justify-content:center;
+  padding-left:8px;
+  padding-right:8px;
+}
+
+.btn:disabled,
+input:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.canvas-surface.loading{
+  position:relative;
+  pointer-events:none;
+}
+
+.canvas-surface.loading::after{
+  content:"Loading WASM…";
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(21,24,29,.82);
+  color:var(--muted);
+  font-size:14px;
+  border-radius:16px;
+  z-index:2;
+}
+
+@media (max-width: 960px){
+  .container{
+    grid-template-columns:1fr;
+  }
+  .panel{
+    width:auto;
+    min-width:0;
+    max-width:none;
+  }
+  .canvas-surface{
+    flex-direction:column;
+  }
+  .canvas-panel[style]{
+    width:auto !important;
+  }
+  .divider{
+    width:auto;
+    height:1px;
+    background:linear-gradient(to right,transparent,#3a424d 20%,#3a424d 80%,transparent);
+  }
 }
 
 .divider{
@@ -342,35 +470,57 @@ code{
     <div class="panel-title">Commands</div>
 
     <div class="row">
-      <input id="createBox" placeholder="v">
+      <input id="createBox" type="number" min="0" step="1" placeholder="v">
       <button class="btn" onclick="uiCreate()">Create</button>
     </div>
 
     <div class="row">
-      <input id="linkBox" placeholder="v u">
+      <input id="linkBox" type="text" inputmode="numeric" placeholder="child parent">
       <button class="btn" onclick="uiLink()">Link</button>
     </div>
 
     <div class="row">
-      <input id="accessBox" placeholder="v">
+      <input id="accessBox" type="number" min="0" step="1" placeholder="v">
       <button class="btn" onclick="uiAccess()">Access</button>
     </div>
 
     <div class="row">
-      <input id="cutBox" placeholder="v">
+      <input id="cutBox" type="number" min="0" step="1" placeholder="v">
       <button class="btn" onclick="uiCut()">Cut</button>
     </div>
 
     <hr style="border:0;border-top:1px solid var(--border);margin:14px 0">
 
-    <button class="btn secondary" onclick="undo()">Undo</button>
+    <div class="panel-actions">
+      <button class="btn secondary" onclick="undo()" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn secondary" onclick="resetAll()" title="Clear all">Reset</button>
+      <button class="btn" onclick="copyLink()" title="Copy shareable URL">Copy link</button>
+    </div>
+
+    <div id="status" class="status" aria-live="polite">Loading WASM…</div>
+
+    <div class="help">
+      <strong>Canvas</strong>
+      <ul>
+        <li>Click empty space → create node</li>
+        <li>Click node → access</li>
+        <li>Drag root → another node → link</li>
+        <li>Right-click node → cut</li>
+      </ul>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch tree"></span> tree edge</span>
+        <span class="legend-item"><span class="legend-swatch preferred"></span> preferred</span>
+        <span class="legend-item"><span class="legend-swatch splay"></span> splay</span>
+        <span class="legend-item"><span class="legend-swatch path"></span> path parent</span>
+      </div>
+    </div>
 
   </div>
 
   <!-- CANVAS AREA -->
   <div class="canvas-wrap">
 
-	<div class="canvas-surface">
+	<div id="canvasSurface" class="canvas-surface loading">
 
 	  <div class="canvas-panel">
 		<div class="canvas-title">represented tree</div>

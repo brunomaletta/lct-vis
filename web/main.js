@@ -17,6 +17,7 @@ let createdVertices = new Set();
 let mouse = {x:0,y:0};
 let dragStartNode = null;
 let hoverNode = null;
+let hoverEdge = null;
 let dragging = false;
 let mouseDownPos = null;
 const CLICK_EPS = 6; // pixels
@@ -53,9 +54,15 @@ function fixHiDPI(canvas, ctx) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-createModule().then(Module => {
+setUiEnabled(false);
+setLoading(true);
+
+createModule(window.Module || {}).then(Module => {
 	ModuleRef = Module;
     window.wasmReady = true;
+    setLoading(false);
+    setUiEnabled(true);
+    setStatus("Ready — click the canvas or use commands", true);
 
     canvas = document.getElementById("treeCanvas");
     ctx = canvas.getContext("2d");
@@ -91,6 +98,32 @@ createModule().then(Module => {
 		hoverEdge = null;
 		canvas.style.cursor = "default";
 	});
+
+	window.addEventListener("resize", () => {
+		fixHiDPI(canvas, ctx);
+		fixHiDPI(auxCanvas, auxCtx);
+		renderTree();
+		renderAux();
+	});
+
+	for (const input of document.querySelectorAll(".panel input")) {
+		input.addEventListener("keydown", (e) => {
+			if (e.key !== "Enter") return;
+			const btn = input.parentElement?.querySelector(".btn");
+			btn?.click();
+		});
+	}
+
+	document.addEventListener("keydown", (e) => {
+		if (!(e.ctrlKey || e.metaKey) || e.key !== "z") return;
+		if (e.target.matches("input, textarea")) return;
+		e.preventDefault();
+		undo();
+	});
+}).catch((err) => {
+    setLoading(false);
+    setStatus("Failed to load WASM — run ./build.sh", false);
+    console.error(err);
 });
 
 
@@ -199,10 +232,22 @@ function updateURL(){
 }
 
 function setStatus(msg, ok=false){
-	return;
-    const s = document.getElementById("status");
-    s.textContent = msg;
-    s.style.color = ok ? "#2e7d32" : "#c0392b";
+    const el = document.getElementById("status");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.toggle("status-ok", ok);
+    el.classList.toggle("status-err", !ok);
+}
+
+function setUiEnabled(enabled){
+    document.querySelectorAll(".panel input, .panel .btn").forEach((el) => {
+        el.disabled = !enabled;
+    });
+}
+
+function setLoading(loading){
+    const surface = document.getElementById("canvasSurface");
+    if (surface) surface.classList.toggle("loading", loading);
 }
 
 
@@ -247,7 +292,7 @@ function isRedundantAccess(cmd){
 function runCommand(cmd){
 
     if(!window.wasmReady){
-        console.log("WASM not ready yet");
+        setStatus("WASM is still loading…", false);
         return false;
     }
 
@@ -267,7 +312,7 @@ function runCommand(cmd){
 	for (const c of expanded) {
 		const ok = executeOnWasm(c);
 		if (!ok) {
-			setStatus("Invalid operation!");
+			setStatus(describeFailure(c), false);
 			rebuildFromCommands(false);
 			return false;
 		}
@@ -324,6 +369,37 @@ function runCommand(cmd){
 
 
 
+function describeFailure(cmd){
+    if (cmd.type === "link")
+        return "Link failed — child must be a tree root and in a different component";
+    if (cmd.type === "cut")
+        return "Cut failed — node has no parent edge";
+    if (cmd.type === "create")
+        return "Create failed — invalid vertex id";
+    return "Operation failed";
+}
+
+function resetAll(){
+    if (!window.wasmReady) return;
+    if (commands.length === 0) return;
+    if (!confirm("Clear all nodes and commands?")) return;
+    commands = [];
+    updateURL();
+    rebuildFromCommands();
+    setStatus("Reset", true);
+}
+
+async function copyLink(){
+    const url = location.href;
+    try {
+        await navigator.clipboard.writeText(url);
+        setStatus("Link copied to clipboard", true);
+    } catch {
+        prompt("Copy this URL:", url);
+        setStatus("Copy the URL from the dialog", true);
+    }
+}
+
 function undo(){
     if(commands.length===0) return;
 
@@ -347,11 +423,13 @@ function undo(){
     }];
 
     playAnimation();
+    setStatus(`Undid — ${commands.length} command(s) remaining`, true);
 }
 
 
 
 function rebuildFromCommands(){
+    if (!ModuleRef) return;
 
     createdVertices.clear();
     animationQueue = [];
@@ -515,44 +593,6 @@ function applyEvent(ev){
 
 	updateAuxFromWasm();
 }
-
-function getSplayRoots(){
-    const roots = [];
-    for(const id in auxNodes){
-        if(auxNodes[id].splayParent === null)
-            roots.push(Number(id));
-    }
-    return roots;
-}
-
-
-function layoutSplay(v, depth, x){
-
-    const node=auxNodes[v];
-
-    const left=node.left;
-    const right=node.right;
-
-    if(left==null && right==null){
-        node.localX=x;
-        node.localY=depth;
-        return x+1;
-    }
-
-    const start=x;
-
-    if(left!=null)
-        x=layoutSplay(left,depth+1,x);
-
-    if(right!=null)
-        x=layoutSplay(right,depth+1,x);
-
-    node.localX=(start+x-1)/2;
-    node.localY=depth;
-
-    return x;
-}
-
 
 function computeLayout(){
 
@@ -733,7 +773,7 @@ function renderTree(skipLayout=false){
 
     if(!ctx) return;
 
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
     if(!skipLayout) computeLayout();
 
@@ -773,10 +813,6 @@ function renderTree(skipLayout=false){
 			mouse.y,
 			"#4da6ff"
 		);
-	}
-
-	if(hoverNode!==null){
-		drawNode(hoverNode,"#ffd54f");
 	}
 
     // nodes
@@ -997,8 +1033,8 @@ function fitToTreeCanvas(padding = 36) {
 
     // NOTE: canvas.width is in *device pixels* after fixHiDPI().
     // That's OK because you also use ctx.setTransform(dpr, ...) so logical drawing coords match CSS pixels.
-    const availW = Math.max(10, canvas.width - 2 * padding);
-    const availH = Math.max(10, canvas.height - 2 * padding);
+    const availW = Math.max(10, canvas.clientWidth - 2 * padding);
+    const availH = Math.max(10, canvas.clientHeight - 2 * padding);
 
     // don't scale up beyond 1 (keeps spacing readable)
     const scale = Math.min(1, Math.min(availW / contentW, availH / contentH));
@@ -1006,8 +1042,8 @@ function fitToTreeCanvas(padding = 36) {
     const contentCenterX = (minX + maxX) / 2;
     const contentCenterY = (minY + maxY) / 2;
 
-    const canvasCenterX = canvas.width / 2;
-    const canvasCenterY = canvas.height / 2;
+    const canvasCenterX = canvas.clientWidth / 2;
+    const canvasCenterY = canvas.clientHeight / 2;
 
     const tx = canvasCenterX - (contentCenterX * scale);
     const ty = canvasCenterY - (contentCenterY * scale);
@@ -1046,8 +1082,8 @@ function fitToAuxCanvas(padding = 36) {
     const contentW = Math.max(1, maxX - minX);
     const contentH = Math.max(1, maxY - minY);
 
-    const availW = Math.max(10, auxCanvas.width - 2 * padding);
-    const availH = Math.max(10, auxCanvas.height - 2 * padding);
+    const availW = Math.max(10, auxCanvas.clientWidth - 2 * padding);
+    const availH = Math.max(10, auxCanvas.clientHeight - 2 * padding);
 
     // scale down if needed, but don't scale up beyond 1 (keeps node positions readable)
     const scale = Math.min(1, Math.min(availW / contentW, availH / contentH));
@@ -1056,8 +1092,8 @@ function fitToAuxCanvas(padding = 36) {
     const contentCenterX = (minX + maxX) / 2;
     const contentCenterY = (minY + maxY) / 2;
 
-    const canvasCenterX = auxCanvas.width / 2;
-    const canvasCenterY = auxCanvas.height / 2;
+    const canvasCenterX = auxCanvas.clientWidth / 2;
+    const canvasCenterY = auxCanvas.clientHeight / 2;
 
     const tx = canvasCenterX - (contentCenterX * scale);
     const ty = canvasCenterY - (contentCenterY * scale);
@@ -1159,7 +1195,7 @@ function computeAuxLayoutCombined() {
 
 function renderAux(skipLayout = false){
     if(!auxCtx) return;
-    auxCtx.clearRect(0,0,auxCanvas.width,auxCanvas.height);
+    auxCtx.clearRect(0, 0, auxCanvas.clientWidth, auxCanvas.clientHeight);
 
     // During animation we will pass skipLayout = true so we DON'T run the
     // layout (which would overwrite the interpolated x/y values).
@@ -1249,8 +1285,6 @@ function stepAnimation(){
 
     const job = animationQueue.shift();
 
-	console.log("HERE");
-
     if(job.kind === "rotation"){
         animateRotation(job).then(() => {
             // proceed to next animation
@@ -1332,6 +1366,7 @@ function onDown(e){
 
 function onUp(e){
     if(e.button!==0) return;
+    if (!mouseDownPos) return;
 
     const dx = mouse.x - mouseDownPos.x;
     const dy = mouse.y - mouseDownPos.y;
@@ -1362,6 +1397,10 @@ function onUp(e){
 
 function onRightDown(e){
     if(e.button!==2) return;
+
+	const r = canvas.getBoundingClientRect();
+	mouse.x = e.clientX - r.left;
+	mouse.y = e.clientY - r.top;
 
 	const target = getTreeNodeAt(mouse.x,mouse.y);
     if(target != null){
