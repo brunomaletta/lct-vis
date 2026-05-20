@@ -40,6 +40,8 @@ const COLORS = {
     edgePath: "#a8b3c2"
 };
 
+const AUX_NODE_R = 16;
+
 // ---------- init ----------
 
 let auxCanvas, auxCtx;
@@ -594,42 +596,42 @@ function applyEvent(ev){
 	updateAuxFromWasm();
 }
 
+const TREE_GAP_X = 56;
+const TREE_GAP_Y = 72;
+const TREE_BASE_Y = 64;
+
 function computeLayout(){
+    const roots = [];
+    for (const [id, node] of forest)
+        if (node.parent === null) roots.push(id);
 
-    let roots = [];
-    for(const [id,node] of forest)
-        if(node.parent===null)
-            roots.push(id);
+    roots.sort((a, b) => a - b);
 
-    let x = 80;
-
-    for(const r of roots){
-        x = layoutDFS(r,0,x);
-        x += 80;
+    let x = TREE_GAP_X;
+    for (const r of roots) {
+        x = layoutDFS(r, 0, x);
+        x += TREE_GAP_X * 2;
     }
 
-    // keep everything visible inside the canvas
     fitToTreeCanvas(36);
 }
 
-function layoutDFS(v,depth,x){
-
+function layoutDFS(v, depth, x){
     const node = forest.get(v);
+    const children = [...node.children].sort((a, b) => a - b);
 
-    if(node.children.size===0){
+    if (children.length === 0) {
         node.x = x;
-        node.y = 80 + depth*80;
-        return x+80;
+        node.y = TREE_BASE_Y + depth * TREE_GAP_Y;
+        return x + TREE_GAP_X;
     }
 
-    let start = x;
+    const start = x;
+    for (const c of children)
+        x = layoutDFS(c, depth + 1, x);
 
-    for(const c of node.children)
-        x = layoutDFS(c,depth+1,x);
-
-    node.x = (start + x-80)/2;
-    node.y = 80 + depth*80;
-
+    node.x = (start + x - TREE_GAP_X) / 2;
+    node.y = TREE_BASE_Y + depth * TREE_GAP_Y;
     return x;
 }
 
@@ -697,7 +699,7 @@ function drawNode(id,node){
 
 function drawAuxEdge(a,b,kind){
 
-    const R = 16;
+    const R = AUX_NODE_R;
 
     // ensure arrow always points upward (toward ancestor)
     let from = a, to = b;
@@ -751,7 +753,7 @@ function drawAuxNode(id,node){
     const isHover = hoverNode === id;
 
     auxCtx.beginPath();
-    auxCtx.arc(node.x,node.y,16,0,Math.PI*2);
+    auxCtx.arc(node.x,node.y,AUX_NODE_R,0,Math.PI*2);
 
     auxCtx.fillStyle = isHover ? COLORS.nodeHover : COLORS.auxFill;
     auxCtx.fill();
@@ -825,6 +827,8 @@ function renderTree(skipLayout=false){
 const NODE_GAP_X = 48;        // horizontal spacing per localX unit
 const NODE_GAP_Y = 66;        // vertical spacing inside splay tree
 const PATH_PARENT_GAP_Y = 110;// vertical gap between blocks along path-parent chain
+const HUB_ROW_GAP_X = 28;     // horizontal gap between spokes under one hub
+const AUX_NODE_CLEAR_Y = AUX_NODE_R * 2 + 12;
 const BLOCK_GAP_X = 40;       // minimal horizontal gap between block bounding boxes
 const BASE_Y = 80;
 
@@ -887,6 +891,10 @@ function computeSplayLayouts() {
         const widthUnits = maxX - minX + 1;
         const centerLocal = (widthUnits - 1) / 2.0; // center in localX units
 
+        let maxLocalY = 0;
+        for (const id of nodes)
+            maxLocalY = Math.max(maxLocalY, auxNodes[id].localY);
+
         // store block info
         blocks[root] = {
             root: Number(root),
@@ -894,11 +902,11 @@ function computeSplayLayouts() {
             minLocalX: 0,
             maxLocalX: widthUnits - 1,
             localCenter: centerLocal,
-            widthUnits
+            widthUnits,
+            maxLocalY,
+            widthPx: widthUnits * NODE_GAP_X,
+            heightPx: (maxLocalY + 1) * NODE_GAP_Y,
         };
-
-        // also keep width in pixels
-        blocks[root].widthPx = blocks[root].widthUnits * NODE_GAP_X;
     }
 
     for (const r of splayRoots) layoutSplay(r);
@@ -928,88 +936,207 @@ function buildBlockGraph(blocks) {
             if (childBlock == null || parentBlock == null || childBlock === parentBlock) continue;
             blockParents[childBlock] = parentBlock;
             if (!blockChildren[parentBlock]) blockChildren[parentBlock] = [];
-            if (!blockChildren[parentBlock].includes(childBlock)) blockChildren[parentBlock].push(childBlock);
+            if (!blockChildren[parentBlock].includes(childBlock))
+                blockChildren[parentBlock].push(childBlock);
         }
     }
+
+    for (const id in blockChildren)
+        blockChildren[id].sort((a, b) => a - b);
 
     return { nodeToRoot, blockChildren, blockParents };
 }
 
 
-// C: compute desired block centers (pixels) by pulling child block toward the parent node's pixel x
-function computeDesiredBlockX(blocks, graph) {
-    const desired = {};
-    // initial desired = local center in pixels
-    for (const rootId in blocks) {
-        desired[rootId] = blocks[rootId].localCenter * NODE_GAP_X;
-    }
-
-    // iterate to propagate anchors from parents -> children
-    const ITER = 10;
-    for (let it = 0; it < ITER; ++it) {
-        for (const childBlockStr in graph.blockParents) {
-            const childBlock = Number(childBlockStr);
-            const parentBlock = Number(graph.blockParents[childBlock]);
-            if (!blocks[parentBlock]) continue;
-
-            // find which parent node inside parentBlock the child points to
-            let targetParentNode = null;
-            for (const nid of blocks[childBlock].nodes) {
-                const par = auxNodes[nid].pathParent;   // <-- changed here
-                if (par != null && graph.nodeToRoot[par] === parentBlock) {
-                    targetParentNode = par;
-                    break;
-                }
-            }
-            if (targetParentNode == null) continue;
-
-            const parentNode = auxNodes[targetParentNode];
-            const parentBlockCenterLocal = blocks[parentBlock].localCenter;
-            // approximate parent node pixel (using current desired center of parent block)
-            const parentNodePixel = desired[parentBlock] + (parentNode.localX - parentBlockCenterLocal) * NODE_GAP_X;
-
-            // move child desired toward parent node pixel (damped)
-            desired[childBlock] = desired[childBlock] * ANCHOR_DAMPING + parentNodePixel * PULL_WEIGHT;
-        }
-    }
-
-    return desired;
+function hubAttachLocalPx(block, attachNodeId) {
+    const n = auxNodes[attachNodeId];
+    return (n.localX - block.localCenter) * NODE_GAP_X;
 }
 
-
-
-// D: resolve collisions — ensure block centers separated by block widths + gap
-function resolveBlockPositions(blocks, desired) {
-    const items = Object.keys(blocks).map(k => ({ id: Number(k), want: desired[k] || blocks[k].localCenter * NODE_GAP_X, width: blocks[k].widthPx }));
-    items.sort((a, b) => a.want - b.want);
-
-    const placed = {};
-    if (items.length === 0) return placed;
-
-    // place first centered at its wanted position
-    placed[items[0].id] = items[0].want;
-    let rightEdge = placed[items[0].id] + items[0].width / 2;
-
-    for (let i = 1; i < items.length; ++i) {
-        const it = items[i];
-        const halfW = it.width / 2;
-        const minCenter = rightEdge + BLOCK_GAP_X + halfW;
-        const center = Math.max(it.want, minCenter);
-        placed[it.id] = center;
-        rightEdge = center + halfW;
+function hubRowWidthPx(childIds, blocks, blockGraph) {
+    let rowW = 0;
+    for (let i = 0; i < childIds.length; i++) {
+        if (i > 0) rowW += HUB_ROW_GAP_X;
+        rowW += measureBlockFootprint(childIds[i], blocks, blockGraph).width;
     }
+    return rowW;
+}
 
-    // second pass: try to pull left if a later block wanted more left (local balancing)
-    for (let i = items.length - 2; i >= 0; --i) {
-        const cur = items[i];
-        const nxt = items[i + 1];
-        const maxCenter = placed[nxt.id] - (cur.width / 2) - BLOCK_GAP_X;
-        if (placed[cur.id] > maxCenter) {
-            placed[cur.id] = maxCenter;
+function measureSubtreeWidth(blockId, blocks, blockGraph) {
+    return measureBlockFootprint(blockId, blocks, blockGraph).width;
+}
+
+function findPathAttachment(parentBlock, childBlock, blocks, blockGraph) {
+    for (const nid of blocks[childBlock].nodes) {
+        const p = auxNodes[nid].pathParent;
+        if (p != null && blockGraph.nodeToRoot[p] === Number(parentBlock))
+            return { parentNode: Number(p), childNode: Number(nid) };
+    }
+    return null;
+}
+
+// Group child blocks by which node inside parentBlock they path-parent to.
+function groupChildrenByAttach(parentBlock, childIds, blocks, blockGraph) {
+    const groups = new Map();
+    for (const cid of childIds) {
+        const att = findPathAttachment(parentBlock, cid, blocks, blockGraph);
+        const key = att ? att.parentNode : -1;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(cid);
+    }
+    return groups;
+}
+
+function layoutHubRowAt(hubPx, childIds, blocks, blockGraph, positions) {
+    const sorted = [...childIds].sort((a, b) => a - b);
+    if (sorted.length === 0) return;
+
+    const widths = sorted.map((cid) => measureBlockFootprint(cid, blocks, blockGraph).width);
+    let totalW = widths.reduce((s, w) => s + w, 0) + HUB_ROW_GAP_X * (sorted.length - 1);
+    let x = hubPx - totalW / 2;
+
+    for (let i = 0; i < sorted.length; i++) {
+        positions[sorted[i]] = x + widths[i] / 2;
+        x += widths[i] + HUB_ROW_GAP_X;
+    }
+}
+
+function hasMultiAttachHub(parentBlock, childIds, blocks, blockGraph) {
+    for (const [parentNodeId, group] of groupChildrenByAttach(parentBlock, childIds, blocks, blockGraph)) {
+        if (parentNodeId !== -1 && group.length > 1) return true;
+    }
+    return false;
+}
+
+function isInHubFanGroup(parentBlock, childId, blocks, blockGraph) {
+    const siblings = (blockGraph.blockChildren[parentBlock] || []).map(Number);
+    for (const [parentNodeId, group] of groupChildrenByAttach(parentBlock, siblings, blocks, blockGraph)) {
+        if (parentNodeId !== -1 && group.length > 1 && group.includes(Number(childId)))
+            return true;
+    }
+    return false;
+}
+
+// Lay out each attach group: multi-child groups fan horizontally under their attach node.
+function layoutChildAttachGroups(parentBlock, parentCenter, childIds, blocks, blockGraph, positions) {
+    const groups = groupChildrenByAttach(parentBlock, childIds, blocks, blockGraph);
+    let handled = false;
+
+    for (const [parentNodeId, group] of groups) {
+        if (parentNodeId === -1) continue;
+
+        if (group.length > 1) {
+            const hubPx = blockNodePixelX(parentBlock, blocks[parentBlock], parentCenter, parentNodeId);
+            layoutHubRowAt(hubPx, group, blocks, blockGraph, positions);
+            handled = true;
+        } else {
+            const target = blockCenterForAttachment(parentBlock, group[0], parentCenter, blocks, blockGraph);
+            if (target != null) {
+                positions[group[0]] = target;
+                handled = true;
+            }
         }
     }
 
-    return placed;
+    return handled;
+}
+
+function blockNodePixelX(blockId, block, centerX, nodeId) {
+    const n = auxNodes[nodeId];
+    return centerX + (n.localX - block.localCenter) * NODE_GAP_X;
+}
+
+function blockCenterForAttachment(parentBlock, childBlock, parentCenter, blocks, blockGraph) {
+    const att = findPathAttachment(parentBlock, childBlock, blocks, blockGraph);
+    if (!att) return null;
+    const parentPx = blockNodePixelX(parentBlock, blocks[parentBlock], parentCenter, att.parentNode);
+    const childLocal = auxNodes[att.childNode].localX - blocks[childBlock].localCenter;
+    return parentPx - childLocal * NODE_GAP_X;
+}
+
+function shiftBlockSubtree(blockId, dx, positions, blockGraph) {
+    const stack = [Number(blockId)];
+    while (stack.length) {
+        const b = stack.pop();
+        if (positions[b] != null) positions[b] += dx;
+        for (const c of blockGraph.blockChildren[b] || []) stack.push(Number(c));
+    }
+}
+
+function layoutNestedChildBlocks(blockId, blocks, blockGraph, positions) {
+    const children = (blockGraph.blockChildren[blockId] || []).map(Number);
+    for (const childId of children) {
+        if (positions[childId] == null) continue;
+        const cw = measureSubtreeWidth(childId, blocks, blockGraph);
+        positionBlockSubtree(childId, positions[childId] - cw / 2, blocks, blockGraph, positions);
+    }
+}
+
+function positionBlockSubtree(blockId, leftX, blocks, blockGraph, positions) {
+    const children = (blockGraph.blockChildren[blockId] || []).map(Number);
+    const subW = measureSubtreeWidth(blockId, blocks, blockGraph);
+
+    if (children.length === 0) {
+        positions[blockId] = leftX + subW / 2;
+        return subW;
+    }
+
+    positions[blockId] = leftX + subW / 2;
+
+    if (children.length > 0 && layoutChildAttachGroups(blockId, positions[blockId], children, blocks, blockGraph, positions)) {
+        layoutNestedChildBlocks(blockId, blocks, blockGraph, positions);
+        return subW;
+    }
+
+    let x = leftX;
+    for (const childId of children) {
+        const cw = positionBlockSubtree(childId, x, blocks, blockGraph, positions);
+        x += cw + BLOCK_GAP_X;
+    }
+
+    const childCenters = children.map((c) => positions[c]);
+    const spanL = Math.min(...children.map((c, i) => childCenters[i] - measureSubtreeWidth(c, blocks, blockGraph) / 2));
+    const spanR = Math.max(...children.map((c, i) => childCenters[i] + measureSubtreeWidth(c, blocks, blockGraph) / 2));
+    positions[blockId] = (spanL + spanR) / 2;
+
+    for (const childId of children) {
+        const target = blockCenterForAttachment(blockId, childId, positions[blockId], blocks, blockGraph);
+        if (target == null) continue;
+        shiftBlockSubtree(childId, target - positions[childId], positions, blockGraph);
+    }
+
+    return subW;
+}
+
+// Place block trees: path-parent chains stack vertically; siblings sit side by side.
+function computeBlockPositions(blocks, blockGraph) {
+    const positions = {};
+    const roots = Object.keys(blocks)
+        .filter((b) => blockGraph.blockParents[b] == null)
+        .map(Number)
+        .sort((a, b) => a - b);
+
+    let x = BLOCK_GAP_X;
+    for (const rootId of roots) {
+        const w = positionBlockSubtree(rootId, x, blocks, blockGraph, positions);
+        x += w + BLOCK_GAP_X * 2;
+    }
+
+    // Second alignment pass for deep path-parent chains (skip hub fans — already column-aligned)
+    for (let pass = 0; pass < 2; pass++) {
+        for (const childId in blockGraph.blockParents) {
+            const parentId = Number(blockGraph.blockParents[childId]);
+            const siblings = (blockGraph.blockChildren[parentId] || []).map(Number);
+            if (isInHubFanGroup(parentId, Number(childId), blocks, blockGraph))
+                continue;
+
+            const target = blockCenterForAttachment(parentId, Number(childId), positions[parentId], blocks, blockGraph);
+            if (target == null) continue;
+            shiftBlockSubtree(Number(childId), target - positions[childId], positions, blockGraph);
+        }
+    }
+
+    return positions;
 }
 
 // ---------- Fit & center helper + small tuning ----------
@@ -1057,11 +1184,108 @@ function fitToTreeCanvas(padding = 36) {
 }
 
 
-// Tweak these to control how strongly child blocks are pulled under parent node
-const PULL_WEIGHT = 0.65;      // currently we used 0.65 (child moves 65% toward parent's pixel x)
-const ANCHOR_DAMPING = 1 - PULL_WEIGHT; // e.g. 0.35
-// Vertical stacking for path-parent. Reduce to bring blocks closer vertically.
-const PATH_PARENT_GAP_Y_TUNE = 80; // try 80..120
+// Vertical gap between splay blocks along a path-parent chain
+const PATH_PARENT_GAP_Y_TUNE = 72;
+
+function nodeYInBlock(nodeId, baseY) {
+    return baseY + auxNodes[nodeId].localY * NODE_GAP_Y;
+}
+
+// Lowest pixel Y of the splay subtree rooted at attachNode (within this block).
+function splaySubtreeBottomInBlock(block, attachNodeId, baseY) {
+    let bottom = nodeYInBlock(attachNodeId, baseY);
+    const stack = [attachNodeId];
+
+    while (stack.length) {
+        const u = stack.pop();
+        if (!block.nodes.includes(Number(u))) continue;
+        const n = auxNodes[u];
+        bottom = Math.max(bottom, nodeYInBlock(u, baseY));
+        if (n.left != null) stack.push(n.left);
+        if (n.right != null) stack.push(n.right);
+    }
+
+    return bottom;
+}
+
+function pathChildRowY(block, attachNodeId, baseY) {
+    const bottom = splaySubtreeBottomInBlock(block, attachNodeId, baseY);
+    return bottom + Math.max(PATH_PARENT_GAP_Y_TUNE, AUX_NODE_CLEAR_Y);
+}
+
+function pathChildRowOffset(block, attachNodeId) {
+    return pathChildRowY(block, attachNodeId, 0);
+}
+
+// Full footprint of a block + path-child subtrees (uses splay width/height and hub rows).
+function measureBlockFootprint(blockId, blocks, blockGraph) {
+    const b = blocks[blockId];
+    const children = (blockGraph.blockChildren[blockId] || []).map(Number);
+
+    let minX = -b.localCenter * NODE_GAP_X - AUX_NODE_R;
+    let maxX = (b.maxLocalX - b.localCenter) * NODE_GAP_X + AUX_NODE_R;
+    let height = b.heightPx + 2 * AUX_NODE_R;
+
+    if (children.length === 0)
+        return { width: maxX - minX, height };
+
+    const groups = [...groupChildrenByAttach(blockId, children, blocks, blockGraph)];
+    groups.sort((a, bb) => {
+        if (a[0] === -1) return 1;
+        if (bb[0] === -1) return -1;
+        return auxNodes[bb[0]].localY - auxNodes[a[0]].localY;
+    });
+
+    let stackFloor = 0;
+
+    for (const [parentNodeId, group] of groups) {
+        const rowTop =
+            parentNodeId === -1
+                ? height + Math.max(PATH_PARENT_GAP_Y_TUNE, AUX_NODE_CLEAR_Y)
+                : Math.max(pathChildRowOffset(b, parentNodeId), stackFloor);
+
+        if (group.length > 1) {
+            const rowW = hubRowWidthPx(group, blocks, blockGraph);
+            const hubX = hubAttachLocalPx(b, parentNodeId);
+            minX = Math.min(minX, hubX - rowW / 2);
+            maxX = Math.max(maxX, hubX + rowW / 2);
+            let rowH = 0;
+            for (const cid of group)
+                rowH = Math.max(rowH, measureBlockFootprint(cid, blocks, blockGraph).height);
+            height = Math.max(height, rowTop + rowH);
+            stackFloor = rowTop + rowH + AUX_NODE_CLEAR_Y;
+        } else if (group.length === 1) {
+            const fp = measureBlockFootprint(group[0], blocks, blockGraph);
+            const att = findPathAttachment(blockId, group[0], blocks, blockGraph);
+            const hubX =
+                parentNodeId !== -1
+                    ? hubAttachLocalPx(b, parentNodeId)
+                    : att
+                      ? hubAttachLocalPx(b, att.parentNode)
+                      : 0;
+            minX = Math.min(minX, hubX - fp.width / 2);
+            maxX = Math.max(maxX, hubX + fp.width / 2);
+            height = Math.max(height, rowTop + fp.height);
+            stackFloor = rowTop + fp.height + AUX_NODE_CLEAR_Y;
+        }
+    }
+
+    return { width: maxX - minX, height };
+}
+
+function blockTreeMaxY(blockId, blocks, blockGraph) {
+    let m = -Infinity;
+    const stack = [Number(blockId)];
+    while (stack.length) {
+        const bid = stack.pop();
+        for (const id of blocks[bid].nodes) {
+            const y = auxNodes[id].y;
+            if (y != null) m = Math.max(m, y);
+        }
+        for (const c of blockGraph.blockChildren[bid] || []) stack.push(Number(c));
+    }
+    return m;
+}
 
 // Fit layout into auxCanvas: scale & translate to keep everything visible with padding.
 function fitToAuxCanvas(padding = 36) {
@@ -1108,7 +1332,7 @@ function fitToAuxCanvas(padding = 36) {
 }
 
 // Replace applyGlobalCoords (or add after it) with this safer version
-function applyGlobalCoords(blocks, graph, blockPositions){
+function applyGlobalCoords(blocks, blockGraph, blockPositions){
 
     const placed = new Set();
 
@@ -1129,51 +1353,44 @@ function applyGlobalCoords(blocks, graph, blockPositions){
             n.y = Math.round(baseY + n.localY * NODE_GAP_Y);
         }
 
-        // 2) place children blocks relative to actual parent node
-        const children = graph.blockChildren[blockId] || [];
+        // 2) path-parent children: one row per attach node (same Y for same path parent)
+        const children = (blockGraph.blockChildren[blockId] || []).map(Number);
+        if (children.length === 0) return;
 
-        for(const child of children){
+        const groups = [...groupChildrenByAttach(blockId, children, blocks, blockGraph)];
+        groups.sort((a, bb) => {
+            if (a[0] === -1) return 1;
+            if (bb[0] === -1) return -1;
+            return auxNodes[bb[0]].localY - auxNodes[a[0]].localY;
+        });
 
-            let parentNodeId = null;
-            let childAttachId = null;
-
-            // find attachment edge
-            for(const nid of blocks[child].nodes){
-                const p = auxNodes[nid].pathParent;
-                if(p!=null && graph.nodeToRoot[p]===blockId){
-                    parentNodeId = p;
-                    childAttachId = Number(nid);
-                    break;
-                }
+        let stackFloor = null;
+        for (const [parentNodeId, group] of groups) {
+            let y;
+            if (parentNodeId === -1) {
+                let blockBottomY = baseY;
+                for (const id of block.nodes)
+                    blockBottomY = Math.max(blockBottomY, nodeYInBlock(id, baseY));
+                y = blockBottomY + Math.max(PATH_PARENT_GAP_Y_TUNE, AUX_NODE_CLEAR_Y);
+            } else {
+                y = pathChildRowY(block, parentNodeId, baseY);
+                if (stackFloor != null) y = Math.max(y, stackFloor);
             }
 
-            if(parentNodeId==null){
-                placeBlock(child, baseY + PATH_PARENT_GAP_Y_TUNE);
-                continue;
-            }
+            for (const child of group)
+                placeBlock(child, y);
 
-            const parentNode = auxNodes[parentNodeId];
-
-            // compute minimum required gap using splay gap
-            let splayGap = 0;
-            const childNode = auxNodes[childAttachId];
-            if(childNode.splayParent!=null){
-                const sp = auxNodes[childNode.splayParent];
-                splayGap = Math.max(0,(childNode.localY - sp.localY) * NODE_GAP_Y);
-            }
-
-            const MIN_EXTRA = 10;
-
-            const childBaseY =
-                parentNode.y + Math.max(PATH_PARENT_GAP_Y_TUNE, splayGap + MIN_EXTRA);
-
-            placeBlock(child, childBaseY);
+            let bottom = -Infinity;
+            for (const child of group)
+                bottom = Math.max(bottom, blockTreeMaxY(child, blocks, blockGraph));
+            if (bottom > -Infinity)
+                stackFloor = bottom + AUX_NODE_CLEAR_Y;
         }
     }
 
     // roots = blocks without parent
     for(const b in blocks){
-        if(graph.blockParents[b]==null){
+        if(blockGraph.blockParents[b]==null){
             placeBlock(Number(b), BASE_Y);
         }
     }
@@ -1186,10 +1403,9 @@ function applyGlobalCoords(blocks, graph, blockPositions){
 function computeAuxLayoutCombined() {
     if (!auxNodes || Object.keys(auxNodes).length === 0) return;
     const blocks = computeSplayLayouts();
-    const graph = buildBlockGraph(blocks);
-    const desired = computeDesiredBlockX(blocks, graph);
-    const blockPositions = resolveBlockPositions(blocks, desired);
-    applyGlobalCoords(blocks, graph, blockPositions);
+    const blockGraph = buildBlockGraph(blocks);
+    const blockPositions = computeBlockPositions(blocks, blockGraph);
+    applyGlobalCoords(blocks, blockGraph, blockPositions);
 }
 
 

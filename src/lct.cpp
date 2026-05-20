@@ -51,14 +51,16 @@ namespace lct {
 	}
 	int access(int v) {
 		int last = -1, last_top = -1;
-		for (int w = v; w+1; last = w, splay(v), w = t[v].p) {
-			splay(w), t[w].ch[1] = (last == -1 ? -1 : v);
+		for (int w = v; w+1; last = w, w = t[w].p) {
+			splay(w);
+			t[w].ch[1] = last;
 
 			// w now prefers last
 			log_event(20, w, last_top);
 			last_top = w;
 			while (t[last_top].ch[0] != -1) last_top = t[last_top].ch[0];
 		}
+		splay(v);
 		return last;
 	}
 	int find_root(int v) {
@@ -72,7 +74,10 @@ namespace lct {
 	}
 	void cut(int v) { // remove aresta de v pro pai
 		access(v);
-		t[v].ch[0] = t[t[v].ch[0]].p = -1;
+		if (t[v].ch[0] != -1) {
+			t[t[v].ch[0]].p = -1;
+			t[v].ch[0] = -1;
+		}
 	}
 	int lca(int v, int w) {
 		return access(v), access(w);

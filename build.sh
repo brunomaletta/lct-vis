@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -x scripts/gen-compile-db.sh ]; then
+  scripts/gen-compile-db.sh || true
+fi
+
 emcc src/lct.cpp -o web/lct.js \
  -sMODULARIZE \
  -sEXPORT_NAME=createModule \

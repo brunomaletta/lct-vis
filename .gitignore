@@ -1,1 +1,27 @@
+# Emscripten build output (regenerate with ./build.sh)
+web/lct.js
+web/lct.wasm
+
+# Local compile database (machine-specific paths)
+compile_commands.json
+
+# clangd / editor caches
+.cache/
+
+# Emscripten SDK if cloned inside the repo
+emsdk/
+
+# Editors (local settings — use .clangd + compile_commands.json for C++)
+.vscode/
+.cursor/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp / backup
 *~
+*.swp
+*.swo
+*.code-workspace
